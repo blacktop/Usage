@@ -18,6 +18,12 @@ final class AppModel {
     /// second `UserDefaultsProfileRootStore` would be a second view of the same suite, and a
     /// Settings edit made against it would race the refresh that is supposed to observe it.
     @ObservationIgnored let profileRoots: any ProfileRootStore
+    /// The providers the coordinator rediscovers through, so Settings groups roots under exactly
+    /// the providers that will read them rather than under a second, drifting list.
+    @ObservationIgnored let registry: ProviderRegistry
+    /// The very file system the coordinator's context reads, so a Settings existence check and a
+    /// discovery read agree about which documents are there.
+    @ObservationIgnored let fileSystem: any ProviderFileSystem
 
     @ObservationIgnored private let coordinator: RefreshCoordinator
     @ObservationIgnored private var lifecycle: RefreshLifecycle?
@@ -30,7 +36,9 @@ final class AppModel {
     ) {
         let store = UsageStore()
         self.store = store
+        self.registry = registry
         profileRoots = context.profileRoots
+        fileSystem = context.fileSystem
         coordinator = RefreshCoordinator(
             registry: registry,
             context: context,

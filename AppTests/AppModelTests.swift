@@ -151,6 +151,8 @@ struct AppModelTests {
     func liveWiringUsesTheSharedStore() {
         let model = AppModel.live()
         #expect(model.profileRoots is UserDefaultsProfileRootStore)
+        #expect(model.fileSystem is SystemFileSystem)
+        #expect(model.registry.providerIDs == ProviderRegistry.agents.providerIDs)
         #expect(model.store.accounts.isEmpty)
         #expect(
             ProviderRegistry.agents.providerIDs.map(\.rawValue).sorted()

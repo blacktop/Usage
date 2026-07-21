@@ -29,7 +29,7 @@ struct UsageApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsRoot()
+            SettingsRoot(model: model)
         }
     }
 }

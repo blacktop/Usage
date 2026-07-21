@@ -1,0 +1,373 @@
+import Foundation
+import Testing
+import UsageKit
+
+@testable import Usage
+
+/// A profile-root store a test drives directly, including into failure.
+///
+/// Not `UserDefaultsProfileRootStore`: these suites must neither read nor disturb the preferences
+/// domain the running user's own roots live in.
+private actor StubProfileRootStore: ProfileRootStore {
+    enum Failure: Sendable, Equatable {
+        case load(ProfileRootStoreError)
+        case save(ProfileRootStoreError)
+    }
+
+    private var collection: ProfileRootCollection
+    private var failure: Failure?
+    private(set) var saveCount = 0
+
+    init(collection: ProfileRootCollection, failure: Failure? = nil) {
+        self.collection = collection
+        self.failure = failure
+    }
+
+    func setFailure(_ failure: Failure?) {
+        self.failure = failure
+    }
+
+    var stored: ProfileRootCollection { collection }
+
+    func load() async throws(ProfileRootStoreError) -> ProfileRootCollection {
+        if case .load(let error) = failure { throw error }
+        return collection
+    }
+
+    func save(_ profiles: ProfileRootCollection) async throws(ProfileRootStoreError) {
+        if case .save(let error) = failure { throw error }
+        saveCount += 1
+        collection = profiles
+    }
+}
+
+@MainActor
+private final class RevealRecorder {
+    private(set) var folders: [URL] = []
+
+    func record(_ folder: URL) {
+        folders.append(folder)
+    }
+}
+
+@MainActor
+private final class RediscoveryRecorder {
+    private(set) var count = 0
+
+    func record() {
+        count += 1
+    }
+}
+
+/// Everything one test needs, wired to in-memory boundaries only.
+@MainActor
+private struct Harness {
+    let store: StubProfileRootStore
+    let files: InMemoryFileSystem
+    let reveal: RevealRecorder
+    let rediscovery: RediscoveryRecorder
+    let settings: ProfileSettingsModel
+
+    init(collection: ProfileRootCollection, files: InMemoryFileSystem = InMemoryFileSystem()) {
+        let store = StubProfileRootStore(collection: collection)
+        let reveal = RevealRecorder()
+        let rediscovery = RediscoveryRecorder()
+        self.store = store
+        self.files = files
+        self.reveal = reveal
+        self.rediscovery = rediscovery
+        settings = ProfileSettingsModel(
+            store: store,
+            registry: .agents,
+            fileSystem: files,
+            reveal: { reveal.record($0) },
+            rediscover: { rediscovery.record() }
+        )
+    }
+
+    func section(_ providerID: String) -> ProfileSettingsModel.ProviderSection? {
+        settings.sections.first { $0.id == ProviderID(providerID) }
+    }
+
+    func rows(_ providerID: String) -> [ProfileSettingsModel.RootRow] {
+        section(providerID)?.rows ?? []
+    }
+}
+
+private let claude = ProviderID("claude")
+private let home = URL(filePath: "/Users/fixture", directoryHint: .isDirectory)
+
+private func collection(
+    _ paths: [String],
+    provider: ProviderID = claude
+) throws -> ProfileRootCollection {
+    var collection = try ProfileRootCollection()
+    for path in paths {
+        try collection.add(providerID: provider, label: "", configurationDirectoryPath: path)
+    }
+    return collection
+}
+
+@Suite("Provider folder settings")
+@MainActor
+struct ProfileSettingsModelTests {
+    @Test("Every stored root is grouped under its provider, in registry then configuration order")
+    func loadGroupsRootsByProvider() async throws {
+        let harness = Harness(collection: try ProfileRootCollection.seeded(homeDirectory: home))
+
+        await harness.settings.load()
+
+        #expect(harness.settings.sections.map(\.id.rawValue) == ["codex", "claude", "copilot"])
+        #expect(harness.settings.sections.allSatisfy { $0.rows.count == 1 })
+        #expect(harness.rows("claude").map(\.profile.label) == ["Claude"])
+        #expect(harness.settings.errorMessage == nil)
+    }
+
+    @Test("A root whose provider is not registered still gets a section of its own")
+    func unregisteredProvidersAreStillVisible() async throws {
+        let stored = try collection(["/Users/fixture/.gemini"], provider: ProviderID("gemini"))
+        let harness = Harness(collection: stored)
+
+        await harness.settings.load()
+
+        #expect(
+            harness.settings.sections.map(\.id.rawValue) == [
+                "codex", "claude", "copilot", "gemini",
+            ])
+        #expect(harness.rows("gemini").map(\.profile.label) == [".gemini"])
+    }
+
+    @Test("Fifty-plus roots on one provider keep their order and their distinct identities")
+    func manyRootsKeepIdentityAndOrder() async throws {
+        let paths = (0..<60).map { "/Users/fixture/roots/\($0)" }
+        let harness = Harness(collection: try collection(paths))
+
+        await harness.settings.load()
+
+        let rows = harness.rows("claude")
+        #expect(rows.count == 60)
+        #expect(rows.map(\.profile.configurationDirectoryPath) == paths)
+        #expect(Set(rows.map(\.id)).count == 60)
+        #expect(harness.rows("codex").isEmpty)
+    }
+
+    @Test("Adding a folder stores its normalized path and names it after the folder")
+    func addingAFolderStoresOnlyItsPath() async throws {
+        let harness = Harness(collection: try ProfileRootCollection())
+        await harness.settings.load()
+
+        await harness.settings.addRoot(
+            providerID: claude,
+            folder: URL(filePath: "/Users/fixture/profiles/./work/", directoryHint: .isDirectory)
+        )
+        await harness.settings.quiesce()
+
+        let rows = harness.rows("claude")
+        #expect(rows.map(\.profile.configurationDirectoryPath) == ["/Users/fixture/profiles/work"])
+        #expect(rows.map(\.profile.label) == ["work"])
+        #expect(rows.allSatisfy { $0.profile.isEnabled })
+        #expect(await harness.store.saveCount == 1)
+        #expect(harness.rediscovery.count == 1, "a successful edit rediscovers exactly once")
+        #expect(harness.files.recordedReads.isEmpty, "Settings never opens a file below a root")
+    }
+
+    @Test("Relative components in a picked folder are resolved before the root is stored")
+    func relativeComponentsAreResolvedBeforeStorage() async throws {
+        let harness = Harness(collection: try ProfileRootCollection())
+        await harness.settings.load()
+
+        await harness.settings.addRoot(
+            providerID: claude,
+            folder: URL(filePath: "/Users/fixture/profiles/work/../archive/.")
+        )
+        await harness.settings.quiesce()
+
+        let stored = await harness.store.stored
+        #expect(
+            stored.profiles.map(\.configurationDirectoryPath)
+                == ["/Users/fixture/profiles/archive"]
+        )
+        #expect(harness.rows("claude").map(\.profile.label) == ["archive"])
+    }
+
+    @Test("A same-provider duplicate is refused and the persisted rows stay on screen")
+    func duplicateRootsAreRefused() async throws {
+        let harness = Harness(collection: try collection(["/Users/fixture/profiles/work"]))
+        await harness.settings.load()
+
+        await harness.settings.addRoot(
+            providerID: claude,
+            folder: URL(filePath: "/Users/fixture/PROFILES/Work")
+        )
+        await harness.settings.quiesce()
+
+        #expect(harness.rows("claude").count == 1)
+        #expect(
+            harness.settings.errorMessage
+                == "Claude already has a folder at /Users/fixture/PROFILES/Work."
+        )
+        #expect(await harness.store.saveCount == 0)
+        #expect(harness.rediscovery.count == 0, "a refused edit rediscovers nothing")
+    }
+
+    @Test("The same folder under a different provider is not a duplicate")
+    func sameFolderIsAllowedForADifferentProvider() async throws {
+        let harness = Harness(collection: try collection(["/Users/fixture/profiles/work"]))
+        await harness.settings.load()
+
+        await harness.settings.addRoot(
+            providerID: ProviderID("codex"),
+            folder: URL(filePath: "/Users/fixture/profiles/work")
+        )
+        await harness.settings.quiesce()
+
+        #expect(harness.rows("claude").count == 1)
+        #expect(harness.rows("codex").count == 1)
+        #expect(harness.settings.errorMessage == nil)
+    }
+
+    @Test("A failed save reports the failure and leaves the last persisted collection visible")
+    func aFailedSaveKeepsTheLastPersistedCollection() async throws {
+        let harness = Harness(collection: try collection(["/Users/fixture/profiles/work"]))
+        await harness.settings.load()
+        let before = harness.rows("claude")
+        await harness.store.setFailure(.save(.storageUnavailable))
+
+        await harness.settings.setEnabled(false, for: try #require(before.first).id)
+        await harness.settings.quiesce()
+
+        #expect(harness.rows("claude") == before)
+        #expect(harness.rows("claude").allSatisfy { $0.profile.isEnabled })
+        #expect(
+            harness.settings.errorMessage == "Provider folders could not be saved to preferences."
+        )
+        #expect(harness.rediscovery.count == 0)
+    }
+
+    @Test("A failed load reports the failure without inventing rows")
+    func aFailedLoadReportsRatherThanSeeds() async throws {
+        let harness = Harness(collection: try ProfileRootCollection())
+        await harness.store.setFailure(.load(.corruptPayload))
+
+        await harness.settings.load()
+
+        #expect(harness.settings.sections.allSatisfy { $0.rows.isEmpty })
+        #expect(harness.settings.errorMessage == "Saved provider folders could not be read.")
+    }
+
+    @Test("Renaming, toggling, and removing each persist and rediscover once")
+    func everyMutationPersistsAndRediscovers() async throws {
+        let harness = Harness(collection: try collection(["/Users/fixture/profiles/work"]))
+        await harness.settings.load()
+        let id = try #require(harness.rows("claude").first).id
+
+        await harness.settings.rename(id, to: "  Work  ")
+        await harness.settings.setEnabled(false, for: id)
+        await harness.settings.quiesce()
+
+        #expect(harness.rows("claude").map(\.profile.label) == ["Work"])
+        #expect(harness.rows("claude").allSatisfy { !$0.profile.isEnabled })
+        #expect(harness.rediscovery.count == 2)
+
+        await harness.settings.removeRoot(id)
+        await harness.settings.quiesce()
+
+        #expect(harness.rows("claude").isEmpty)
+        #expect(await harness.store.stored.profiles.isEmpty)
+        #expect(harness.rediscovery.count == 3)
+    }
+
+    @Test("Mutations queued together are serialized rather than racing over one collection")
+    func concurrentMutationsAreSerialized() async throws {
+        let harness = Harness(collection: try ProfileRootCollection())
+        await harness.settings.load()
+
+        async let first: Void = harness.settings.addRoot(
+            providerID: claude,
+            folder: URL(filePath: "/Users/fixture/profiles/a")
+        )
+        async let second: Void = harness.settings.addRoot(
+            providerID: claude,
+            folder: URL(filePath: "/Users/fixture/profiles/b")
+        )
+        _ = await (first, second)
+        await harness.settings.quiesce()
+
+        #expect(
+            Set(harness.rows("claude").map(\.profile.configurationDirectoryPath))
+                == ["/Users/fixture/profiles/a", "/Users/fixture/profiles/b"]
+        )
+        #expect(await harness.store.saveCount == 2)
+    }
+
+    @Test("A row reports the provider's sign-in file by existence alone")
+    func credentialPresenceIsAnExistenceCheck() async throws {
+        let files = InMemoryFileSystem(
+            homeDirectory: home,
+            files: [
+                URL(filePath: "/Users/fixture/profiles/work/.credentials.json"): Data(),
+                URL(filePath: "/Users/fixture/profiles/copilot/hosts.json"): Data(),
+            ]
+        )
+        var stored = try collection(
+            ["/Users/fixture/profiles/work", "/Users/fixture/profiles/empty"]
+        )
+        try stored.add(
+            providerID: ProviderID("copilot"),
+            label: "",
+            configurationDirectoryPath: "/Users/fixture/profiles/copilot"
+        )
+        let harness = Harness(collection: stored, files: files)
+
+        await harness.settings.load()
+
+        #expect(harness.rows("claude").map(\.hasCredentialDocument) == [true, false])
+        #expect(harness.rows("copilot").map(\.hasCredentialDocument) == [true])
+        #expect(harness.files.recordedReads.isEmpty, "presence is existence, never a read")
+    }
+
+    @Test("Every registered provider names the documents it reads below a root")
+    func everyRegisteredProviderNamesItsDocuments() {
+        #expect(
+            ProfileSettingsModel.credentialDocumentNames(for: claude) == [".credentials.json"]
+        )
+        #expect(
+            ProfileSettingsModel.credentialDocumentNames(for: ProviderID("codex")) == [
+                "auth.json"
+            ])
+        #expect(
+            ProfileSettingsModel.credentialDocumentNames(for: ProviderID("copilot"))
+                == ["apps.json", "hosts.json", "oauth.json"]
+        )
+        #expect(ProfileSettingsModel.credentialDocumentNames(for: ProviderID("gemini")).isEmpty)
+    }
+
+    @Test("Reveal hands the root's own directory to the injected action and opens nothing")
+    func revealUsesTheInjectedAction() async throws {
+        let harness = Harness(collection: try collection(["/Users/fixture/profiles/work"]))
+        await harness.settings.load()
+        let id = try #require(harness.rows("claude").first).id
+
+        harness.settings.revealInFinder(id)
+        harness.settings.revealInFinder(ProfileRootID())
+
+        #expect(
+            harness.reveal.folders
+                == [URL(filePath: "/Users/fixture/profiles/work", directoryHint: .isDirectory)],
+            "an unknown row reveals nothing rather than guessing a folder"
+        )
+    }
+
+    @Test("A dismissed error stays dismissed until the next failure")
+    func errorsAreDismissible() async throws {
+        let harness = Harness(collection: try ProfileRootCollection())
+        await harness.store.setFailure(.load(.unsupportedSchemaVersion(7)))
+
+        await harness.settings.load()
+        #expect(harness.settings.errorMessage != nil)
+
+        harness.settings.dismissError()
+
+        #expect(harness.settings.errorMessage == nil)
+    }
+}
