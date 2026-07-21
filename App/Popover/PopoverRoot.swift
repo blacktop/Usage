@@ -27,7 +27,7 @@ struct PopoverRoot: View {
             PopoverFooter(quit: quit)
         }
         .padding(14)
-        .frame(width: 340)
+        .frame(width: PopoverOverviewLayout.width(forProviderCount: sections.count))
         // Instrumentation only. These counts are what a human reads out of the unified log to fill
         // in the results table in docs/menu-bar-lifecycle.md. Nothing here feeds scheduling: until
         // that table shows appearances and disappearances pairing, the appearance signal is not

@@ -43,43 +43,55 @@ struct PopoverAccountSection: Identifiable {
     }
 }
 
-struct PopoverAccountList: View {
-    private static let topID = "provider-account-list-top"
+enum PopoverOverviewLayout {
+    static let accountAreaHeight: CGFloat = 640
 
+    private static let singleProviderWidth: CGFloat = 620
+    private static let additionalProviderWidth: CGFloat = 300
+    private static let shippedProviderCount = 3
+
+    static func width(forProviderCount count: Int) -> CGFloat {
+        let columns = min(max(count, 1), shippedProviderCount)
+        return singleProviderWidth + CGFloat(columns - 1) * additionalProviderWidth
+    }
+}
+
+struct PopoverAccountList: View {
     let sections: [PopoverAccountSection]
     let onRetry: () -> Void
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                Color.clear
-                    .frame(height: 0)
-                    .id(Self.topID)
-
-                LazyVStack(alignment: .leading, spacing: 12, pinnedViews: [.sectionHeaders]) {
-                    ForEach(sections) { section in
-                        Section {
-                            ProviderAccountRows(section: section, onRetry: onRetry)
-                        } header: {
+        Group {
+            if sections.isEmpty {
+                ContentUnavailableView(
+                    "No accounts yet",
+                    systemImage: "person.crop.circle.badge.questionmark",
+                    description: Text("Add a provider config folder in Settings.")
+                )
+            } else {
+                VStack(spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 16) {
+                        ForEach(sections) { section in
                             ProviderSectionHeader(section: section)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
+
+                    Divider()
+
+                    ScrollView {
+                        HStack(alignment: .top, spacing: 16) {
+                            ForEach(sections) { section in
+                                ProviderAccountRows(section: section, onRetry: onRetry)
+                                    .frame(maxWidth: .infinity, alignment: .top)
+                            }
+                        }
+                        .padding(.bottom, 2)
+                    }
                 }
-                .padding(.bottom, 2)
             }
-            .scrollIndicators(.hidden)
-            .frame(minHeight: 76, maxHeight: 420)
-            .overlay {
-                if sections.isEmpty {
-                    ContentUnavailableView(
-                        "No accounts yet",
-                        systemImage: "person.crop.circle.badge.questionmark",
-                        description: Text("Add a provider config folder in Settings.")
-                    )
-                }
-            }
-            .onAppear { proxy.scrollTo(Self.topID, anchor: .top) }
         }
+        .frame(height: PopoverOverviewLayout.accountAreaHeight)
         .accessibilityIdentifier("provider-account-list")
     }
 }
@@ -89,11 +101,8 @@ private struct ProviderSectionHeader: View {
 
     var body: some View {
         Text(section.displayName)
-            .font(.caption.weight(.semibold))
+            .font(.subheadline.weight(.semibold))
             .accessibilityAddTraits(.isHeader)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial)
     }
 }
 
