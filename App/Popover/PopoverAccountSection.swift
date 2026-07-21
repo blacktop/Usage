@@ -44,92 +44,113 @@ struct PopoverAccountSection: Identifiable {
 }
 
 struct PopoverAccountList: View {
+    private static let topID = "provider-account-list-top"
+
     let sections: [PopoverAccountSection]
     let onRetry: () -> Void
 
     var body: some View {
-        ScrollView {
-            GlassEffectContainer(spacing: 10) {
-                LazyVStack(alignment: .leading, spacing: 10) {
+        ScrollViewReader { proxy in
+            ScrollView {
+                Color.clear
+                    .frame(height: 0)
+                    .id(Self.topID)
+
+                LazyVStack(alignment: .leading, spacing: 12, pinnedViews: [.sectionHeaders]) {
                     ForEach(sections) { section in
-                        ProviderAccountSection(section: section, onRetry: onRetry)
+                        Section {
+                            ProviderAccountRows(section: section, onRetry: onRetry)
+                        } header: {
+                            ProviderSectionHeader(section: section)
+                        }
                     }
                 }
+                .padding(.bottom, 2)
             }
-            .padding(.vertical, 2)
-        }
-        .frame(minHeight: 90, maxHeight: 560)
-        .overlay {
-            if sections.isEmpty {
-                ContentUnavailableView(
-                    "No accounts yet",
-                    systemImage: "person.crop.circle.badge.questionmark",
-                    description: Text("Add a provider config folder in Settings.")
-                )
+            .scrollIndicators(.hidden)
+            .frame(minHeight: 76, maxHeight: 420)
+            .overlay {
+                if sections.isEmpty {
+                    ContentUnavailableView(
+                        "No accounts yet",
+                        systemImage: "person.crop.circle.badge.questionmark",
+                        description: Text("Add a provider config folder in Settings.")
+                    )
+                }
             }
+            .onAppear { proxy.scrollTo(Self.topID, anchor: .top) }
         }
         .accessibilityIdentifier("provider-account-list")
     }
 }
 
-private struct ProviderAccountSection: View {
+private struct ProviderSectionHeader: View {
+    let section: PopoverAccountSection
+
+    var body: some View {
+        Text(section.displayName)
+            .font(.caption.weight(.semibold))
+            .accessibilityAddTraits(.isHeader)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.regularMaterial)
+    }
+}
+
+private struct ProviderAccountRows: View {
     let section: PopoverAccountSection
     let onRetry: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(section.displayName)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(section.visibleRowCount, format: .number)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                    .accessibilityLabel("\(section.visibleRowCount) visible rows")
-            }
-
             ForEach(section.accounts) { state in
                 AccountCard(state: state, onRetry: onRetry)
             }
 
             ForEach(section.unrepresentedProfiles) { profile in
-                UnrepresentedProfileCard(status: profile)
+                UnrepresentedProfileRow(status: profile)
             }
         }
     }
 }
 
-private struct UnrepresentedProfileCard: View {
+private struct UnrepresentedProfileRow: View {
     let status: ConfiguredProfileStatus
 
     private var profile: ProfileRoot { status.profile }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(profile.label)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-            Label(message, systemImage: "exclamationmark.circle")
-                .font(.caption)
-                .foregroundStyle(.orange)
-            Text(profile.configurationDirectoryPath)
-                .font(.caption2.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.callout)
+                .foregroundStyle(status.hasCredentialDocument ? .orange : .secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(profile.label)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular.tint(.orange.opacity(0.08)), in: .rect(cornerRadius: 12))
+        .background(.primary.opacity(0.035), in: .rect(cornerRadius: 9))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(.primary.opacity(0.06), lineWidth: 1)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("configured-profile-\(profile.id.rawValue)")
     }
 
     private var message: String {
         status.hasCredentialDocument
-            ? "No usable account was discovered in this folder."
-            : "No sign-in file here yet."
+            ? "No usable account found"
+            : "Not signed in"
     }
 }

@@ -18,15 +18,16 @@ struct PopoverRoot: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             PopoverHeader(isRefreshing: store.isRefreshing, refresh: refresh)
+            Divider()
             PopoverAccountList(sections: sections, onRetry: refresh)
             DiscoveryFailureList(failures: store.discoveryFailures)
 
             Divider()
 
-            PopoverFooter(lifecycle: lifecycle, quit: quit)
+            PopoverFooter(quit: quit)
         }
-        .padding(16)
-        .frame(width: 360)
+        .padding(14)
+        .frame(width: 340)
         // Instrumentation only. These counts are what a human reads out of the unified log to fill
         // in the results table in docs/menu-bar-lifecycle.md. Nothing here feeds scheduling: until
         // that table shows appearances and disappearances pairing, the appearance signal is not
@@ -55,10 +56,13 @@ private struct PopoverHeader: View {
             Spacer()
             Button(action: refresh) {
                 Image(systemName: "arrow.clockwise")
+                    .frame(width: 16, height: 16)
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.borderless)
+            .controlSize(.small)
             .disabled(isRefreshing)
             .accessibilityLabel("Refresh")
+            .help("Refresh usage")
         }
     }
 }
@@ -80,31 +84,20 @@ private struct DiscoveryFailureList: View {
 }
 
 private struct PopoverFooter: View {
-    let lifecycle: MenuLifecycleRecorder
     let quit: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
-            Text(
-                "appear \(lifecycle.appearances) · disappear \(lifecycle.disappearances) · "
-                    + (lifecycle.isBalanced ? "balanced" : "unbalanced")
-            )
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-
-            GlassEffectContainer(spacing: 8) {
-                HStack {
-                    SettingsLink {
-                        Text("Settings…")
-                    }
-                    .buttonStyle(.glass)
-                    Spacer()
-                    Button("Quit", action: quit)
-                        .buttonStyle(.glass)
-                        .keyboardShortcut("q")
-                }
+        HStack {
+            SettingsLink {
+                Text("Settings…")
             }
+            .buttonStyle(.borderless)
+            Spacer()
+            Button("Quit", action: quit)
+                .buttonStyle(.borderless)
+                .keyboardShortcut("q")
+                .help("Quit Usage")
         }
+        .font(.caption)
     }
 }

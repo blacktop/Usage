@@ -58,7 +58,11 @@ struct AccountCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+        .background(.primary.opacity(0.045), in: .rect(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(.primary.opacity(0.07), lineWidth: 1)
+        }
     }
 
     private var header: some View {
@@ -66,13 +70,6 @@ struct AccountCard: View {
             Text(state.account.displayName ?? "Unknown account")
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
-            if state.account.availability == .active {
-                Text("active")
-                    .font(.caption2)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(.tint.opacity(0.2), in: .capsule)
-            }
             Spacer()
             indicator
             if let plan = state.report?.plan {
@@ -119,7 +116,7 @@ struct AccountCard: View {
                 }
             }
             Button("Try again", action: onRetry)
-                .buttonStyle(.glass)
+                .buttonStyle(.link)
                 .font(.caption)
         }
     }
