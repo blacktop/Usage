@@ -23,14 +23,21 @@ struct ClaudeCredentialMetadata: Sendable, Hashable {
     }
 }
 
+extension ClaudeCredentialMetadata: ProviderCredentialMetadata {}
+
 /// Reader for Claude Code's credential document.
 enum ClaudeCredentialFile {
-    /// Keychain service the Claude Code CLI stores its credentials under.
+    /// Legacy host-wide Keychain service, retained for the diagnostic gate only.
     static let keychainService = "Claude Code-credentials"
     /// Where the bearer token sits inside the document, for `CredentialSource` to resolve.
     static let secretPath = ["claudeAiOauth", "accessToken"]
     /// The one document Claude discovery reads, directly below a configured root.
     static let documentName = ".credentials.json"
+
+    /// Current Claude Code scopes its OAuth service to `CLAUDE_CONFIG_DIR` with this suffix.
+    static func keychainService(root: URL) -> String {
+        "Claude Code-credentials-\(ProfileKeychainName.pathHash(root: root, length: 8))"
+    }
 
     static func url(root: URL) -> URL {
         root.appending(path: documentName, directoryHint: .notDirectory)

@@ -1,5 +1,12 @@
 # Keychain feasibility gate
 
+> **Superseded scope, 2026-07-21.** This experiment measured the legacy host-wide Claude service
+> `Claude Code-credentials`. It did not measure the current per-root OAuth services
+> `Claude Code-credentials-<root hash>`, and it said nothing about Codex's direct Keychain backend.
+> Production now uses only verified addresses derived from explicitly configured roots: file first,
+> then the matching Keychain row. The historical measurements below remain useful evidence about
+> the legacy service and ad-hoc signing, but they no longer gate provider registration.
+
 ## Why this exists
 
 Claude Code stores its credential as a Keychain generic-password item under service
@@ -170,7 +177,7 @@ amount of policy tuning inside Usage changes it. Untested alternatives, in rough
 sign with a stable Developer ID; or read the documented `~/.claude/.credentials.json` fallback,
 which is a plain file read and needs no ACL. Neither has been measured.
 
-## Decision
+## Historical decision (superseded)
 
 **Claude stays disabled on both hosts.** The gate measured a refusal, not a pass.
 
@@ -184,3 +191,9 @@ and the user-initiated leg failing is a fact about code identity, not about our 
 
 Re-run this gate after any change to the app's signing identity, and record the new rows rather than
 editing these. Copilot is a **separate** gate with no Keychain dependency; nothing here applies to it.
+
+## Current decision
+
+Claude and Codex are enabled for configured roots. Discovery is attributes-only and cannot prompt;
+payload reads retain the background no-UI policy and fail closed if the current signing identity is
+not permitted. A sign-in file still takes precedence when both stores contain a credential.

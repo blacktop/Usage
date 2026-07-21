@@ -22,21 +22,32 @@ public struct CodexProvider: Provider {
 
     public init() {}
 
-    /// One account per enabled configured root that holds an `auth.json`.
+    /// One account per enabled configured root with file- or Keychain-backed CLI authentication.
     ///
-    /// The credential file, and only the credential file. A `Codex Auth` Keychain item exists on
-    /// some machines, but nothing documents its payload format and the Codex CLI reference never
-    /// reads it. Treating it as another `auth.json` was a guess: a wrong guess sends an
-    /// unrecognised payload as a bearer token, and being right would still buy nothing, since an
-    /// attributes-only query cannot recover the `account_id` that addresses the right workspace,
-    /// nor say which configured root the item belongs to. Reinstate it only with a verified format.
+    /// Codex's direct Keychain backend stores the same serialized `auth.json` document under
+    /// service `Codex Auth`; its account attribute is a SHA-256-derived identity for `CODEX_HOME`.
+    /// That makes lookup root-scoped rather than a host-wide fallback. Enumeration is attributes
+    /// only and file authentication keeps precedence when both exist.
     public func discoverAccounts(using context: ProviderContext) async throws -> [ProviderAccount] {
-        var accounts: [ProviderAccount] = []
-        for root in try await context.enabledProfileRoots(for: Self.id) {
-            guard let account = Self.account(in: root, using: context) else { continue }
-            accounts.append(account)
+        let roots = try await context.enabledProfileRoots(for: Self.id)
+        let fileAccounts = roots.map { Self.fileAccount(in: $0, using: context) }
+        guard fileAccounts.contains(where: { $0 == nil }) else {
+            return fileAccounts.compactMap { $0 }
         }
-        return accounts
+
+        let namespace = CredentialLocator(
+            kind: .keychain, identifier: CodexAuthFile.keychainService)
+        let keychainSlots = (try? await context.credentials.slots(in: namespace)) ?? []
+        return zip(roots, fileAccounts).compactMap { root, fileAccount in
+            if let fileAccount { return fileAccount }
+            let expectedAccount = CodexAuthFile.keychainAccount(root: root.directory)
+            guard
+                let descriptor = keychainSlots.first(where: {
+                    $0.slot.opaqueID == expectedAccount
+                })
+            else { return nil }
+            return Self.keychainAccount(descriptor: descriptor, root: root)
+        }
     }
 
     public func fetchUsage(
@@ -81,19 +92,27 @@ public struct CodexProvider: Provider {
         for account: ProviderAccount,
         using context: ProviderContext
     ) async throws -> UsageReport {
-        let metadata = metadata(for: account, using: context)
-        let request = usageRequest(chatGPTAccountID: metadata?.accountID)
-        let response = try await context.credentials.withCredential(at: account.locator) {
+        let fallbackMetadata = fileMetadata(for: account, using: context)
+        let result = try await context.credentials.withCredential(at: account.locator) {
             credential in
-            try await context.http.send(credential.authorizing(request, with: .bearer))
+            let metadata =
+                try credential.metadata {
+                    (data: Data) throws(UsageError) -> CodexAuthMetadata in
+                    try CodexAuthFile.parse(data, kind: account.locator.kind)
+                } ?? fallbackMetadata
+            let request = usageRequest(chatGPTAccountID: metadata?.accountID)
+            let response = try await context.http.send(
+                credential.authorizing(request, with: .bearer)
+            )
+            return CredentialOperationResponse(response: response, metadata: metadata)
         }
-        guard response.isSuccess else {
-            throw UsageError.from(response, now: context.clock.now)
+        guard result.response.isSuccess else {
+            throw UsageError.from(result.response, now: context.clock.now)
         }
         return try CodexUsageMapper.report(
-            from: CodexUsageResponse.decode(response.body),
+            from: CodexUsageResponse.decode(result.response.body),
             account: account,
-            fallbackPlan: metadata?.planType,
+            fallbackPlan: result.metadata?.planType,
             capturedAt: context.clock.now
         )
     }
@@ -117,7 +136,7 @@ public struct CodexProvider: Provider {
     /// A root without the file is not an unusable account, it is a root Codex was never signed in
     /// under. A file that is present but unparsable is the opposite: a slot that exists and cannot
     /// be used, which is worth showing.
-    private static func account(
+    private static func fileAccount(
         in root: ProfileRootLocation,
         using context: ProviderContext
     ) -> ProviderAccount? {
@@ -138,7 +157,7 @@ public struct CodexProvider: Provider {
     /// Read fresh on every fetch rather than cached at discovery, because the Codex CLI rewrites
     /// the file whenever it refreshes, and a cached `account_id` from an earlier login would
     /// address the wrong workspace.
-    private static func metadata(
+    private static func fileMetadata(
         for account: ProviderAccount,
         using context: ProviderContext
     ) -> CodexAuthMetadata? {
@@ -146,6 +165,29 @@ public struct CodexProvider: Provider {
         let url = URL(filePath: account.locator.identifier)
         guard let data = try? context.fileSystem.read(contentsOf: url) else { return nil }
         return try? CodexAuthFile.parse(data)
+    }
+
+    private static func keychainAccount(
+        descriptor: CredentialSlotDescriptor,
+        root: ProfileRootLocation
+    ) -> ProviderAccount {
+        let slot = Self.slot(for: root.directory)
+        let locator = CredentialLocator(
+            kind: .keychain,
+            identifier: descriptor.locator.identifier,
+            path: CodexAuthFile.secretPath
+        )
+        return ProviderAccount(
+            key: AccountKey(
+                providerID: id,
+                accountID: .credentialSlot(provider: id, slot: slot)
+            ),
+            slot: slot,
+            locator: locator,
+            profileRootID: root.id,
+            displayName: root.label,
+            availability: .active
+        )
     }
 
     /// The descriptor for one credential file.
@@ -160,8 +202,7 @@ public struct CodexProvider: Provider {
         label: String,
         metadata: CodexAuthMetadata?
     ) -> ProviderAccount {
-        let path = url.standardizedFileURL.path(percentEncoded: false)
-        let slot = CredentialSlotID(source: slotSource, opaqueID: path)
+        let slot = Self.slot(for: url.deletingLastPathComponent())
         let accountID =
             metadata?.accountID.map { AccountID.canonical(provider: id, canonicalID: $0) }
             ?? AccountID.credentialSlot(provider: id, slot: slot)
@@ -173,5 +214,11 @@ public struct CodexProvider: Provider {
             displayName: label,
             availability: metadata == nil ? .unavailable : .active
         )
+    }
+
+    /// Stable logical slot for a configured root, independent of its current credential store.
+    private static func slot(for root: URL) -> CredentialSlotID {
+        let path = CodexAuthFile.url(root: root).standardizedFileURL.path(percentEncoded: false)
+        return CredentialSlotID(source: slotSource, opaqueID: path)
     }
 }

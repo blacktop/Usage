@@ -100,6 +100,7 @@ final class SealedCredentialSource: CredentialSource, Sendable {
     }
 
     private let secrets: [CredentialLocator: String]
+    private let documents: [CredentialLocator: Data]
     private let slotsByNamespace: [CredentialLocator: [CredentialSlotDescriptor]]
     private let interactiveOnly: Set<CredentialLocator>
     private let allowsInteraction: Bool
@@ -107,11 +108,13 @@ final class SealedCredentialSource: CredentialSource, Sendable {
 
     init(
         secrets: [CredentialLocator: String] = [:],
+        documents: [CredentialLocator: Data] = [:],
         slots: [CredentialLocator: [CredentialSlotDescriptor]] = [:],
         interactiveOnly: Set<CredentialLocator> = [],
         allowsInteraction: Bool = false
     ) {
         self.secrets = secrets
+        self.documents = documents
         slotsByNamespace = slots
         self.interactiveOnly = interactiveOnly
         self.allowsInteraction = allowsInteraction
@@ -141,7 +144,7 @@ final class SealedCredentialSource: CredentialSource, Sendable {
         at locator: CredentialLocator,
         perform operation: (Credential) async throws -> T
     ) async throws -> T {
-        let secret = try state.withLock { state throws(UsageError) -> String in
+        let resolved = try state.withLock { state throws(UsageError) -> (String, Data?) in
             state.resolved.append(locator)
             if interactiveOnly.contains(locator), !allowsInteraction {
                 state.refusedInteractiveRequests.append(locator)
@@ -150,9 +153,12 @@ final class SealedCredentialSource: CredentialSource, Sendable {
             guard let secret = secrets[locator] else {
                 throw UsageError.credentialUnavailable(kind: locator.kind)
             }
-            return secret
+            return (secret, documents[locator])
         }
-        return try await operation(Credential(secret: secret))
+        let credential =
+            resolved.1.map { Credential(secret: resolved.0, document: $0) }
+            ?? Credential(secret: resolved.0)
+        return try await operation(credential)
     }
 
     func slots(in namespace: CredentialLocator) async throws -> [CredentialSlotDescriptor] {

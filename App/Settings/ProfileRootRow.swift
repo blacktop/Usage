@@ -71,9 +71,9 @@ struct ProfileRootRow: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         } else {
-            Label("No sign-in file here yet", systemImage: "exclamationmark.circle")
+            Label("No sign-in file in this folder", systemImage: "key")
                 .font(.caption2)
-                .foregroundStyle(.orange)
+                .foregroundStyle(.secondary)
         }
     }
 

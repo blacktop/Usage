@@ -20,18 +20,24 @@ public struct ClaudeProvider: Provider {
 
     public init() {}
 
-    /// One account per enabled configured root that holds a credential document.
+    /// One account per enabled configured root with file- or Keychain-backed CLI authentication.
     ///
-    /// File-only, and the Keychain is never enumerated — not as a first choice and not as a
-    /// fallback. A Keychain item belongs to the host, not to a root: it cannot say which configured
-    /// root it came from, so every root would collapse onto one slot and the roots the user
-    /// actually configured would stop being what Usage reports. An attributes-only enumeration
-    /// would also still be a Keychain query on every background refresh.
+    /// Current Claude Code hashes `CLAUDE_CONFIG_DIR` into the Keychain service name, so the item
+    /// is root-scoped and distinct across profiles. Enumeration reads attributes and a persistent
+    /// row reference only; payload access remains subject to the context's interaction policy.
     public func discoverAccounts(using context: ProviderContext) async throws -> [ProviderAccount] {
         var accounts: [ProviderAccount] = []
         for root in try await context.enabledProfileRoots(for: Self.id) {
-            guard let account = Self.account(in: root, using: context) else { continue }
-            accounts.append(account)
+            if let account = Self.fileAccount(in: root, using: context) {
+                accounts.append(account)
+                continue
+            }
+            let service = ClaudeCredentialFile.keychainService(root: root.directory)
+            let namespace = CredentialLocator(kind: .keychain, identifier: service)
+            guard let descriptor = try? await context.credentials.slots(in: namespace).first else {
+                continue
+            }
+            accounts.append(Self.keychainAccount(descriptor: descriptor, root: root))
         }
         return accounts
     }
@@ -40,24 +46,32 @@ public struct ClaudeProvider: Provider {
         for account: ProviderAccount,
         using context: ProviderContext
     ) async throws -> UsageReport {
-        let metadata = Self.fileMetadata(for: account, using: context)
-        if let metadata, metadata.isExpired(at: context.clock.now) {
-            throw UsageError(
-                category: .authenticationExpired,
-                reason: .credentialUnavailable(kind: account.locator.kind)
-            )
-        }
-        let response = try await context.credentials.withCredential(at: account.locator) {
+        let fallbackMetadata = Self.fileMetadata(for: account, using: context)
+        let result = try await context.credentials.withCredential(at: account.locator) {
             credential in
-            try await context.http.send(credential.authorizing(Self.usageRequest(), with: .bearer))
+            let metadata =
+                try credential.metadata {
+                    (data: Data) throws(UsageError) -> ClaudeCredentialMetadata in
+                    try ClaudeCredentialFile.parse(data, kind: account.locator.kind)
+                } ?? fallbackMetadata
+            if let metadata, metadata.isExpired(at: context.clock.now) {
+                throw UsageError(
+                    category: .authenticationExpired,
+                    reason: .credentialUnavailable(kind: account.locator.kind)
+                )
+            }
+            let response = try await context.http.send(
+                credential.authorizing(Self.usageRequest(), with: .bearer)
+            )
+            return CredentialOperationResponse(response: response, metadata: metadata)
         }
-        guard response.isSuccess else {
-            throw UsageError.from(response, now: context.clock.now)
+        guard result.response.isSuccess else {
+            throw UsageError.from(result.response, now: context.clock.now)
         }
         return try ClaudeUsageMapper.report(
-            from: ClaudeUsageResponse.decode(response.body),
+            from: ClaudeUsageResponse.decode(result.response.body),
             account: account,
-            plan: metadata?.planLabel,
+            plan: result.metadata?.planLabel,
             capturedAt: context.clock.now
         )
     }
@@ -84,7 +98,7 @@ public struct ClaudeProvider: Provider {
     ///
     /// Identity is the file's own path, so two roots are two accounts even when the same person is
     /// signed in under both — which is the point of configuring them separately.
-    private static func account(
+    private static func fileAccount(
         in root: ProfileRootLocation,
         using context: ProviderContext
     ) -> ProviderAccount? {
@@ -92,8 +106,8 @@ public struct ClaudeProvider: Provider {
         guard context.fileSystem.fileExists(at: url),
             let data = try? context.fileSystem.read(contentsOf: url)
         else { return nil }
+        let slot = Self.slot(for: root.directory)
         let path = url.standardizedFileURL.path(percentEncoded: false)
-        let slot = CredentialSlotID(source: slotSource, opaqueID: path)
         let metadata = try? ClaudeCredentialFile.parse(data, kind: .file)
         let expired = metadata?.isExpired(at: context.clock.now) ?? true
         return ProviderAccount(
@@ -110,6 +124,29 @@ public struct ClaudeProvider: Provider {
         )
     }
 
+    private static func keychainAccount(
+        descriptor: CredentialSlotDescriptor,
+        root: ProfileRootLocation
+    ) -> ProviderAccount {
+        let slot = Self.slot(for: root.directory)
+        let locator = CredentialLocator(
+            kind: .keychain,
+            identifier: descriptor.locator.identifier,
+            path: ClaudeCredentialFile.secretPath
+        )
+        return ProviderAccount(
+            key: AccountKey(
+                providerID: id,
+                accountID: .credentialSlot(provider: id, slot: slot)
+            ),
+            slot: slot,
+            locator: locator,
+            profileRootID: root.id,
+            displayName: root.label,
+            availability: .active
+        )
+    }
+
     /// Metadata for the account's credential document, which is where the plan label and the local
     /// expiry check come from.
     ///
@@ -120,8 +157,16 @@ public struct ClaudeProvider: Provider {
         for account: ProviderAccount,
         using context: ProviderContext
     ) -> ClaudeCredentialMetadata? {
+        guard account.locator.kind == .file else { return nil }
         let url = URL(filePath: account.locator.identifier)
         guard let data = try? context.fileSystem.read(contentsOf: url) else { return nil }
         return try? ClaudeCredentialFile.parse(data, kind: .file)
+    }
+
+    /// Stable logical slot for a configured root, independent of its current credential store.
+    private static func slot(for root: URL) -> CredentialSlotID {
+        let path = ClaudeCredentialFile.url(root: root)
+            .standardizedFileURL.path(percentEncoded: false)
+        return CredentialSlotID(source: slotSource, opaqueID: path)
     }
 }

@@ -27,6 +27,6 @@ public struct FileCredentialSource: CredentialSource {
             throw UsageError.credentialUnavailable(kind: .file)
         }
         let secret = try CredentialDocument.secret(in: payload, at: locator.path, kind: .file)
-        return try await operation(Credential(secret: secret))
+        return try await operation(Credential(secret: secret, document: payload))
     }
 }

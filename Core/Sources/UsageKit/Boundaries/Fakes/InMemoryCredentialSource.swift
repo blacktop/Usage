@@ -1,3 +1,4 @@
+import Foundation
 import Synchronization
 
 /// In-memory `CredentialSource` that never touches the Keychain or the disk.
@@ -7,6 +8,7 @@ import Synchronization
 public final class InMemoryCredentialSource: CredentialSource, Sendable {
     private struct State {
         var secrets: [CredentialLocator: String]
+        var documents: [CredentialLocator: Data]
         var interactiveOnly: Set<CredentialLocator>
         var slots: [CredentialLocator: [CredentialSlotDescriptor]]
         var resolvedLocators: [CredentialLocator] = []
@@ -18,12 +20,18 @@ public final class InMemoryCredentialSource: CredentialSource, Sendable {
 
     public init(
         secrets: [CredentialLocator: String] = [:],
+        documents: [CredentialLocator: Data] = [:],
         interactiveOnly: Set<CredentialLocator> = [],
         slots: [CredentialLocator: [CredentialSlotDescriptor]] = [:],
         interaction: any InteractionPolicy = BackgroundInteractionPolicy()
     ) {
         state = Mutex(
-            State(secrets: secrets, interactiveOnly: interactiveOnly, slots: slots)
+            State(
+                secrets: secrets,
+                documents: documents,
+                interactiveOnly: interactiveOnly,
+                slots: slots
+            )
         )
         self.interaction = interaction
     }
@@ -49,7 +57,7 @@ public final class InMemoryCredentialSource: CredentialSource, Sendable {
         at locator: CredentialLocator,
         perform operation: (Credential) async throws -> T
     ) async throws -> T {
-        let secret = try state.withLock { state throws(UsageError) -> String in
+        let resolved = try state.withLock { state throws(UsageError) -> (String, Data?) in
             state.resolvedLocators.append(locator)
             if state.interactiveOnly.contains(locator), !interaction.allowsCredentialUI {
                 throw UsageError.interactionForbidden()
@@ -57,8 +65,11 @@ public final class InMemoryCredentialSource: CredentialSource, Sendable {
             guard let secret = state.secrets[locator] else {
                 throw UsageError.credentialUnavailable(kind: locator.kind)
             }
-            return secret
+            return (secret, state.documents[locator])
         }
-        return try await operation(Credential(secret: secret))
+        let credential =
+            resolved.1.map { Credential(secret: resolved.0, document: $0) }
+            ?? Credential(secret: resolved.0)
+        return try await operation(credential)
     }
 }

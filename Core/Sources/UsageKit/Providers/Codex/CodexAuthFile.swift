@@ -16,9 +16,13 @@ struct CodexAuthMetadata: Sendable, Hashable {
     let lastRefresh: Date?
 }
 
+extension CodexAuthMetadata: ProviderCredentialMetadata {}
+
 /// Reader for the Codex CLI's credential file. Read-only by construction: there is no writer here
 /// and no token-refresh path, because Usage and the Codex CLI would race on the same file.
 enum CodexAuthFile {
+    /// Service used by Codex when `cli_auth_credentials_store = "keyring"`.
+    static let keychainService = "Codex Auth"
     /// Where the bearer token sits inside the document, for `CredentialSource` to resolve.
     static let secretPath = ["tokens", "access_token"]
     /// How long an untouched `last_refresh` is tolerated before the credential looks stale.
@@ -28,6 +32,11 @@ enum CodexAuthFile {
     static let stalenessThreshold: TimeInterval = 8 * 86_400
     /// The one document Codex discovery reads, directly below a configured root.
     static let documentName = "auth.json"
+
+    /// Codex scopes a direct Keychain row to `CODEX_HOME` with this account attribute.
+    static func keychainAccount(root: URL) -> String {
+        "cli|\(ProfileKeychainName.pathHash(root: root, length: 16))"
+    }
 
     static func url(root: URL) -> URL {
         root.appending(path: documentName, directoryHint: .notDirectory)
@@ -39,12 +48,15 @@ enum CodexAuthFile {
     /// returns the API key before it ever looks at `tokens`, but an API key is not a valid bearer
     /// for the usage endpoint, so honouring it would turn "logged in with an API key" into a 401
     /// that reads as an expired login.
-    static func parse(_ data: Data) throws(UsageError) -> CodexAuthMetadata {
+    static func parse(
+        _ data: Data,
+        kind: CredentialLocator.Kind = .file
+    ) throws(UsageError) -> CodexAuthMetadata {
         guard let document = try? JSONDecoder().decode(Document.self, from: data) else {
             throw UsageError.decodingFailure(field: "auth.json")
         }
         guard document.hasOAuthTokens else {
-            throw UsageError.credentialUnavailable(kind: .file)
+            throw UsageError.credentialUnavailable(kind: kind)
         }
         let claims = document.idToken.flatMap(CodexIDToken.claims(in:))
         return CodexAuthMetadata(

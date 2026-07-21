@@ -160,6 +160,6 @@ private struct UnrepresentedProfileRow: View {
     private var message: String {
         status.hasCredentialDocument
             ? "No usable account found"
-            : "Not signed in"
+            : "No readable credential found"
     }
 }

@@ -1,3 +1,5 @@
+import Foundation
+
 /// Where a credential lives, expressed without any secret material.
 ///
 /// Not `Codable`: a locator names a file path or a Keychain service, and neither belongs in
@@ -70,9 +72,16 @@ public enum AuthorizationScheme: Sendable, Hashable {
 /// Copying secret-derived bytes out of the operation still takes deliberate, reviewable work.
 public struct Credential: CustomStringConvertible, CustomDebugStringConvertible {
     private let secret: String
+    private let document: Data?
 
     public init(secret: String) {
         self.secret = secret
+        document = nil
+    }
+
+    init(secret: String, document: Data) {
+        self.secret = secret
+        self.document = document
     }
 
     /// `request` with the secret stamped onto it according to `scheme`.
@@ -96,6 +105,26 @@ public struct Credential: CustomStringConvertible, CustomDebugStringConvertible 
 
     public var description: String { "Credential(redacted)" }
     public var debugDescription: String { description }
+
+    /// Parses non-secret provider metadata while the credential document remains operation-scoped.
+    ///
+    /// The marker protocol is internal, so downstream code cannot add a secret-carrying result type
+    /// and use this as a general document escape hatch.
+    func metadata<Metadata: ProviderCredentialMetadata>(
+        using parser: (Data) throws(UsageError) -> Metadata
+    ) throws(UsageError) -> Metadata? {
+        guard let document else { return nil }
+        return try parser(document)
+    }
+}
+
+protocol ProviderCredentialMetadata: Sendable {}
+
+/// The only way parsed credential-document metadata leaves a credential-scoped operation.
+/// Metadata conformances are package-internal and reviewed beside their parsers.
+struct CredentialOperationResponse<Metadata: ProviderCredentialMetadata>: CredentialScopedResult {
+    let response: HTTPResponse
+    let metadata: Metadata?
 }
 
 /// A result that a credential-scoped operation is allowed to hand back.

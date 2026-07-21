@@ -4,29 +4,28 @@
 
 | | |
 |---|---|
-| Credential | `~/.codex/auth.json`, written by the Codex CLI |
+| Credential | `ROOT/auth.json`, or the root-scoped direct Keychain row |
 | Owner | the `codex` CLI |
 | Access | read-only, through the injected `ProviderFileSystem` and `CredentialSource` |
-| Keychain | **not read.** Codex is file-only |
+| Keychain | service `Codex Auth`, account `cli|<first 16 hex of SHA-256(canonical ROOT)>` |
 
-`CredentialLocator(kind: .file, identifier: "<home>/.codex/auth.json", path: ["tokens", "access_token"])`.
-The locator names where the bearer token lives; it never carries the token. The home directory
-comes from `ProviderFileSystem.homeDirectory`; no path is hardcoded in the provider.
+The file locator is
+`CredentialLocator(kind: .file, identifier: "ROOT/auth.json", path: ["tokens", "access_token"])`.
+The Keychain locator carries the enumerated row's persistent reference and the same JSON path. A
+locator names where the bearer token lives; it never carries the token. Roots come only from the
+shared configured-root store.
 
-### Why the Keychain is not a Codex source
+### Root-scoped Keychain lookup
 
-A generic-password item under service `Codex Auth` does exist on some machines. Usage does not read
-it, and `CodexProvider` never enumerates the Keychain at all — `CodexProviderTests` asserts that
-across every credential-file state.
+Codex's direct Keychain backend serializes the same `auth.json` document into a generic-password
+item. Its account attribute is derived from the canonical `CODEX_HOME`, which lets Usage match an
+enumerated row to one configured root without reading the payload. A file takes precedence when it
+exists; Usage enumerates the service only when at least one configured root has no file.
 
-The reason is format, not existence. Nothing documents that item's payload, and the Codex CLI
-reference never reads it, so treating it as another `auth.json` was a guess. A wrong guess sends an
-unrecognised payload as a bearer token. Being right would still buy nothing: an attributes-only
-enumeration cannot recover the `account_id` that addresses the right workspace, so the resulting
-account would be slot-scoped and its request would omit `ChatGPT-Account-Id` — which for a user in
-several ChatGPT workspaces is the difference between correct and silently-wrong numbers.
-
-Reinstate it only with a verified payload format, and only with a way to recover the account id.
+Discovery returns attributes and a persistent reference only. During fetch, the payload is parsed
+inside the credential-scoped operation so `tokens.account_id` still addresses the correct ChatGPT
+workspace. Tests pin the root hash, multi-root matching, file precedence, discovery-without-payload,
+and the scoped parse.
 
 ### Fields read
 
@@ -53,6 +52,7 @@ authorization decision.
 
 - Never writes, replaces, truncates, or `chmod`s `auth.json`. `ProviderFileSystem` has no write
   member, so the capability does not exist to be misused.
+- Never creates, updates, or deletes a `Codex Auth` Keychain item.
 - Never calls `POST https://auth.openai.com/oauth/token`. Refreshing means rewriting `auth.json`,
   and atomic replacement alone cannot prevent a lost update against a concurrently running Codex
   CLI.
@@ -108,7 +108,7 @@ else. Rendering a guess is worse than omitting it.
 | Signal | Result |
 |---|---|
 | HTTP 401 or 403 | `.authenticationExpired`, carrying `codex login` |
-| `auth.json` absent | no file account; the Keychain is consulted |
+| `auth.json` absent | the matching root-scoped Keychain account is consulted |
 | `auth.json` present without OAuth tokens | account discovered, `.unavailable` |
 | credential no longer resolvable at fetch time | `.credentialUnavailable`, carrying `codex login` |
 | HTTP 429 | `.rateLimited`, honouring `Retry-After` in both delta-seconds and HTTP-date form |

@@ -6,6 +6,23 @@ import Testing
 @Suite("Codex provider")
 struct CodexProviderTests {
     private let authURL = CodexAuthFile.url(root: ProviderFixtures.codexRoot)
+    private static let keychainNamespace = CredentialLocator(
+        kind: .keychain,
+        identifier: CodexAuthFile.keychainService
+    )
+
+    private static func keychainDescriptor(
+        root: URL,
+        identifier: String
+    ) -> CredentialSlotDescriptor {
+        CredentialSlotDescriptor(
+            slot: CredentialSlotID(
+                source: "keychain:\(CodexAuthFile.keychainService)",
+                opaqueID: CodexAuthFile.keychainAccount(root: root)
+            ),
+            locator: CredentialLocator(kind: .keychain, identifier: identifier)
+        )
+    }
 
     private func fileSystem(auth fixture: String?) throws -> SealedFileSystem {
         guard let fixture else { return SealedFileSystem() }
@@ -80,34 +97,104 @@ struct CodexProviderTests {
         )
     }
 
-    // MARK: - The Keychain is not a Codex credential source
+    // MARK: - Root-scoped Keychain credentials
 
-    /// A `Codex Auth` Keychain item exists on some machines, but its payload format is
-    /// undocumented and the Codex CLI reference never reads it. Reading it meant guessing it holds
-    /// another `auth.json`. Reinstating that guess turns these red.
-    @Test(
-        "the Keychain is never enumerated, whatever the credential file says",
-        arguments: [nil, "codex-auth", "codex-auth-apikey-only"] as [String?]
-    )
-    func neverEnumeratesTheKeychain(fixture: String?) async throws {
-        let (context, _, credentials) = try context(auth: fixture)
-
-        let accounts = try await CodexProvider().discoverAccounts(using: context)
-
-        #expect(credentials.enumeratedNamespaces.isEmpty)
-        #expect(accounts.allSatisfy { $0.locator.kind == .file })
+    @Test("the direct Keychain account name is stable for a canonical Codex root")
+    func keychainAccountName() {
+        #expect(
+            CodexAuthFile.keychainAccount(root: ProviderFixtures.codexRoot)
+                == "cli|e425276ea4797f46")
     }
 
-    @Test("an unusable credential file yields an unavailable account, not a Keychain fallback")
-    func unusableFileDoesNotFallBack() async throws {
-        let (context, _, credentials) = try context(auth: "codex-auth-apikey-only")
+    @Test("discovers every configured Codex root backed by its own Keychain account")
+    func discoversMultipleKeychainAccounts() async throws {
+        let work = ProviderFixtures.root("profiles/work")
+        let personal = ProviderFixtures.root("profiles/personal")
+        let descriptors = [
+            Self.keychainDescriptor(root: work, identifier: "persistent-work"),
+            Self.keychainDescriptor(root: personal, identifier: "persistent-personal"),
+        ]
+        let credentials = SealedCredentialSource(
+            slots: [Self.keychainNamespace: descriptors]
+        )
+        let context = ProviderContext.sealed(
+            credentials: credentials,
+            profileRoots: try SealedProfileRoots.store(
+                SealedProfileRoots.root(CodexProvider.id, label: "Work", at: work),
+                SealedProfileRoots.root(CodexProvider.id, label: "Personal", at: personal)
+            )
+        )
 
         let accounts = try await CodexProvider().discoverAccounts(using: context)
 
-        #expect(accounts.count == 1)
-        #expect(accounts.first?.locator.kind == .file)
-        #expect(accounts.first?.availability == .unavailable)
-        #expect(credentials.enumeratedNamespaces.isEmpty)
+        #expect(accounts.map(\.displayName) == ["Work", "Personal"])
+        #expect(accounts.map(\.locator.kind) == [.keychain, .keychain])
+        #expect(accounts.map(\.locator.identifier) == ["persistent-work", "persistent-personal"])
+        #expect(credentials.enumeratedNamespaces == [Self.keychainNamespace])
+        #expect(credentials.resolvedLocators.isEmpty, "discovery must never read Keychain payloads")
+    }
+
+    @Test("a credential file takes precedence without changing the root's logical slot")
+    func fileTakesPrecedenceOverKeychain() async throws {
+        let descriptor = Self.keychainDescriptor(
+            root: ProviderFixtures.codexRoot,
+            identifier: "persistent-codex"
+        )
+        let credentials = SealedCredentialSource(
+            slots: [Self.keychainNamespace: [descriptor]]
+        )
+        let keychainAccount = try #require(
+            try await CodexProvider().discoverAccounts(
+                using: ProviderContext.sealed(credentials: credentials)
+            ).first
+        )
+        let context = ProviderContext.sealed(
+            fileSystem: try fileSystem(auth: "codex-auth"),
+            credentials: credentials
+        )
+
+        let account = try #require(
+            try await CodexProvider().discoverAccounts(using: context).first
+        )
+
+        #expect(account.locator.kind == .file)
+        #expect(account.slot == keychainAccount.slot)
+        #expect(credentials.resolvedLocators.isEmpty)
+    }
+
+    @Test("fetch parses the Keychain auth document inside the credential operation")
+    func fetchesWithKeychainCredential() async throws {
+        let descriptor = Self.keychainDescriptor(
+            root: ProviderFixtures.codexRoot,
+            identifier: "persistent-codex"
+        )
+        let locator = CredentialLocator(
+            kind: .keychain,
+            identifier: descriptor.locator.identifier,
+            path: CodexAuthFile.secretPath
+        )
+        let credentials = SealedCredentialSource(
+            secrets: [locator: "FAKE-access-token-0000"],
+            documents: [locator: try ProviderFixtures.data("Codex", "codex-auth")],
+            slots: [Self.keychainNamespace: [descriptor]]
+        )
+        let http = InMemoryHTTPTransport()
+        http.stub(
+            CodexProvider.usageURL,
+            with: try ProviderFixtures.response("Codex", "codex-usage-happy")
+        )
+        let context = ProviderContext.sealed(credentials: credentials, http: http)
+        let account = try #require(
+            try await CodexProvider().discoverAccounts(using: context).first
+        )
+
+        let report = try await CodexProvider().fetchUsage(for: account, using: context)
+
+        let sent = try #require(http.recordedRequests.first)
+        #expect(sent.headerValue("Authorization") == "Bearer FAKE-access-token-0000")
+        #expect(sent.headerValue("ChatGPT-Account-Id") == "acct_FAKE0000000000000001")
+        #expect(report.plan == "pro")
+        #expect(credentials.resolvedLocators == [locator])
     }
 
     // MARK: - Request construction

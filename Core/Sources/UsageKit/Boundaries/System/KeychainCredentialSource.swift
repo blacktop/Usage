@@ -70,7 +70,7 @@ public struct KeychainCredentialSource: CredentialSource {
         }
         let payload = try payload(for: reference)
         let secret = try CredentialDocument.secret(in: payload, at: locator.path, kind: .keychain)
-        return try await operation(Credential(secret: secret))
+        return try await operation(Credential(secret: secret, document: payload))
     }
 
     /// `query` with the no-UI markers applied, unless the caller's policy permits credential UI.
