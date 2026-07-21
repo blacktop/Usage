@@ -11,6 +11,8 @@ struct IdentityReconciliationTests {
     func activeAndProfileDuplicatesMerge() {
         var reconciler = IdentityReconciler()
         let canonical = Fixtures.canonicalKey("shared")
+        let activeRoot = ProfileRootID()
+        let profileRoot = ProfileRootID()
         #expect(
             reconciler.observe(fallback: Fixtures.slotKey("active"), canonical: canonical, at: now)
                 == .recorded
@@ -24,12 +26,14 @@ struct IdentityReconciliationTests {
             Fixtures.account(
                 key: Fixtures.slotKey("active"),
                 slot: Fixtures.slot("active"),
+                profileRootID: activeRoot,
                 displayName: "shared@example.com",
                 availability: .active
             ),
             Fixtures.account(
                 key: Fixtures.slotKey("profile"),
                 slot: Fixtures.slot("profile"),
+                profileRootID: profileRoot,
                 displayName: "shared@example.com"
             ),
         ])
@@ -37,6 +41,7 @@ struct IdentityReconciliationTests {
         #expect(projections.count == 1)
         #expect(projections[0].key == canonical)
         #expect(projections[0].slots.map(\.opaqueID) == ["active", "profile"])
+        #expect(projections[0].profileRootIDs == [activeRoot, profileRoot])
         #expect(projections[0].availability == .active)
     }
 
@@ -93,6 +98,36 @@ struct IdentityReconciliationTests {
         #expect(table[fallback]?.account.key == canonical)
         #expect(table[canonical]?.report == earlyReport)
         #expect(table.reconciler.resolve(fallback) == canonical)
+    }
+
+    @Test("Promotion keeps every configured root represented on the surviving account")
+    func promotionMergesConfiguredRoots() {
+        var table = AccountStateTable()
+        let canonical = Fixtures.canonicalKey("acct-1")
+        let fallback = Fixtures.slotKey("profile")
+        let canonicalRoot = ProfileRootID()
+        let profileRoot = ProfileRootID()
+        table.replaceDiscovered(
+            [
+                Fixtures.account(
+                    key: canonical,
+                    slot: Fixtures.slot("canonical"),
+                    profileRootID: canonicalRoot
+                ),
+                Fixtures.account(
+                    key: fallback,
+                    slot: Fixtures.slot("profile"),
+                    profileRootID: profileRoot
+                ),
+            ],
+            forProvider: Fixtures.provider,
+            at: now
+        )
+
+        #expect(table.promote(fallback: fallback, canonical: canonical, at: now) == .recorded)
+
+        #expect(table.accounts.count == 1)
+        #expect(table[canonical]?.account.profileRootIDs == [canonicalRoot, profileRoot])
     }
 
     @Test("Discovery itself records the promotion, so the cached report survives the identity flip")

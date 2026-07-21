@@ -121,7 +121,7 @@ public struct AccountStateTable: Sendable, Hashable {
         let winner = keepsExisting ? existing : retired
         let loser = keepsExisting ? retired : existing
         return AccountState(
-            account: existing.account,
+            account: existing.account.merging(retired.account),
             report: winner.report,
             refreshPhase: existing.refreshPhase,
             lastError: Self.survivingError(winner: winner, loser: loser),

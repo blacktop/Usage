@@ -18,6 +18,12 @@ public struct ProviderAccount: Sendable, Hashable, Identifiable {
     public let key: AccountKey
     public let slot: CredentialSlotID
     public let locator: CredentialLocator
+    /// The configured root this credential was discovered below, when discovery is root-backed.
+    ///
+    /// Presentation uses this non-secret identity to keep a configured folder visible when it has
+    /// no usable account yet. It never participates in account identity: two roots that prove the
+    /// same canonical account still reconcile to one account with both roots attached.
+    public let profileRootID: ProfileRootID?
     /// Human-facing label such as an email or workspace name. Never used as identity.
     public let displayName: String?
     public let availability: Availability
@@ -28,12 +34,14 @@ public struct ProviderAccount: Sendable, Hashable, Identifiable {
         key: AccountKey,
         slot: CredentialSlotID,
         locator: CredentialLocator,
+        profileRootID: ProfileRootID? = nil,
         displayName: String? = nil,
         availability: Availability = .inactive
     ) {
         self.key = key
         self.slot = slot
         self.locator = locator
+        self.profileRootID = profileRootID
         self.displayName = displayName
         self.availability = availability
     }

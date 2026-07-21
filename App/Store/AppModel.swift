@@ -12,6 +12,8 @@ import UsageKit
 @MainActor
 final class AppModel {
     let store: UsageStore
+    /// Enabled configured folders, including ones that do not hold a usable account yet.
+    private(set) var configuredProfiles: [ConfiguredProfileStatus] = []
     /// The very store the coordinator's context discovers through.
     ///
     /// Held rather than rebuilt so that editing a root and rediscovering are the same store: a
@@ -28,6 +30,7 @@ final class AppModel {
     @ObservationIgnored private let coordinator: RefreshCoordinator
     @ObservationIgnored private var lifecycle: RefreshLifecycle?
     @ObservationIgnored private var hasStarted = false
+    @ObservationIgnored private var profileLoadGeneration = 0
 
     init(
         registry: ProviderRegistry,
@@ -66,16 +69,40 @@ final class AppModel {
         )
         lifecycle.start()
         self.lifecycle = lifecycle
+        await reloadConfiguredProfiles()
         await coordinator.refresh()
     }
 
     /// Coalesces with whatever is already in flight and never bypasses an active cooldown.
     func refreshNow() async {
+        await reloadConfiguredProfiles()
         await coordinator.refresh()
     }
 
+    /// Refreshes the non-secret configured-folder projection used by the popover.
+    ///
+    /// A generation stamp prevents a slower older read from replacing a newer Settings edit. A
+    /// failed read keeps the last good projection while provider discovery reports its own error.
+    private func reloadConfiguredProfiles() async {
+        profileLoadGeneration += 1
+        let generation = profileLoadGeneration
+        guard let collection = try? await profileRoots.load(), generation == profileLoadGeneration
+        else { return }
+        configuredProfiles = collection.profiles
+            .filter(\.isEnabled)
+            .map { profile in
+                ConfiguredProfileStatus(
+                    profile: profile,
+                    hasCredentialDocument: ProviderCredentialDocuments.exists(
+                        below: profile,
+                        using: fileSystem
+                    )
+                )
+            }
+    }
+
     private func refreshInBackground() {
-        Task { await coordinator.refresh() }
+        Task { await refreshNow() }
     }
 
     private func suspendInBackground() {

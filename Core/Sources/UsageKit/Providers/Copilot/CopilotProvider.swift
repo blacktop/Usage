@@ -52,7 +52,9 @@ public struct CopilotProvider: Provider {
             for slot in CopilotCredentialFiles.slots(in: data, fileName: fileName)
             where !claimedHosts.contains(slot.host) && usageURL(host: slot.host) != nil {
                 claimedHosts.insert(slot.host)
-                accounts.append(account(for: slot, at: url, label: root.label))
+                accounts.append(
+                    account(for: slot, at: url, profileRootID: root.id, label: root.label)
+                )
             }
         }
         return accounts
@@ -147,6 +149,7 @@ public struct CopilotProvider: Provider {
     private static func account(
         for slot: CopilotCredentialSlot,
         at url: URL,
+        profileRootID: ProfileRootID,
         label: String
     ) -> ProviderAccount {
         let path = url.standardizedFileURL.path(percentEncoded: false)
@@ -165,6 +168,7 @@ public struct CopilotProvider: Provider {
                 identifier: path,
                 path: [slot.mapKey, slot.tokenField]
             ),
+            profileRootID: profileRootID,
             displayName: label,
             availability: .active
         )

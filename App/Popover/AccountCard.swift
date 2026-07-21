@@ -57,7 +57,8 @@ struct AccountCard: View {
             }
         }
         .padding(12)
-        .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 12))
     }
 
     private var header: some View {
@@ -118,7 +119,7 @@ struct AccountCard: View {
                 }
             }
             Button("Try again", action: onRetry)
-                .buttonStyle(.borderless)
+                .buttonStyle(.glass)
                 .font(.caption)
         }
     }

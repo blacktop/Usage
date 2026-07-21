@@ -125,7 +125,12 @@ public struct CodexProvider: Provider {
         guard context.fileSystem.fileExists(at: url),
             let data = try? context.fileSystem.read(contentsOf: url)
         else { return nil }
-        return account(at: url, label: root.label, metadata: try? CodexAuthFile.parse(data))
+        return account(
+            at: url,
+            profileRootID: root.id,
+            label: root.label,
+            metadata: try? CodexAuthFile.parse(data)
+        )
     }
 
     /// Re-reads the credential file for the request's non-secret metadata.
@@ -151,6 +156,7 @@ public struct CodexProvider: Provider {
     /// file's own path, which is stable for as long as the root points where it points.
     private static func account(
         at url: URL,
+        profileRootID: ProfileRootID,
         label: String,
         metadata: CodexAuthMetadata?
     ) -> ProviderAccount {
@@ -163,6 +169,7 @@ public struct CodexProvider: Provider {
             key: AccountKey(providerID: id, accountID: accountID),
             slot: slot,
             locator: locator(at: url),
+            profileRootID: profileRootID,
             displayName: label,
             availability: metadata == nil ? .unavailable : .active
         )

@@ -28,6 +28,7 @@ enum Fixtures {
     static func account(
         key: AccountKey,
         slot slotID: CredentialSlotID,
+        profileRootID: ProfileRootID? = nil,
         displayName: String? = nil,
         availability: ProviderAccount.Availability = .inactive
     ) -> ProviderAccount {
@@ -35,6 +36,7 @@ enum Fixtures {
             key: key,
             slot: slotID,
             locator: CredentialLocator(kind: .keychain, identifier: slotID.opaqueID),
+            profileRootID: profileRootID,
             displayName: displayName,
             availability: availability
         )

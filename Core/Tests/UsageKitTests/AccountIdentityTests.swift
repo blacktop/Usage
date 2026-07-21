@@ -67,7 +67,7 @@ struct AccountIdentityTests {
     }
 
     /// A field-name diagnostic only. The boundary itself is asserted in `CredentialBoundaryTests`.
-    @Test("A provider account carries exactly the five non-secret fields it declares")
+    @Test("A provider account carries exactly the six non-secret fields it declares")
     func providerAccountFieldsAreSecretFree() {
         let account = Fixtures.account(
             key: Fixtures.canonicalKey("alpha"),
@@ -75,7 +75,12 @@ struct AccountIdentityTests {
             displayName: "alpha@example.com"
         )
         let mirrored = Mirror(reflecting: account).children.compactMap(\.label)
-        #expect(mirrored == ["key", "slot", "locator", "displayName", "availability"])
+        #expect(
+            mirrored
+                == [
+                    "key", "slot", "locator", "profileRootID", "displayName", "availability",
+                ]
+        )
         #expect(String(describing: Credential(secret: "sk-live-abc")) == "Credential(redacted)")
     }
 }

@@ -272,7 +272,7 @@ final class ProfileSettingsModel {
         return ProviderSection(
             id: id,
             displayName: displayName,
-            credentialDocumentNames: Self.credentialDocumentNames(for: id),
+            credentialDocumentNames: ProviderCredentialDocuments.names(for: id),
             rows: rows
         )
     }
@@ -283,24 +283,15 @@ final class ProfileSettingsModel {
     /// disabled is checked the same way as one that is not, because the answer describes the folder
     /// rather than the schedule.
     private func hasCredentialDocument(_ profile: ProfileRoot) -> Bool {
-        let directory = Self.directoryURL(for: profile)
-        return Self.credentialDocumentNames(for: profile.providerID).contains { name in
-            fileSystem.fileExists(at: directory.appending(path: name, directoryHint: .notDirectory))
-        }
+        return ProviderCredentialDocuments.exists(below: profile, using: fileSystem)
     }
 
     /// The documents each provider is known to read directly below a configured root.
     ///
-    /// Spelled out here rather than read from `UsageKit`: the provider constants are that module's
-    /// own, and Settings has no business importing the readers when all it asks is whether a name
-    /// is present. A provider that is registered but absent from this list simply reports nothing.
+    /// Kept as a model-level entry point for tests and delegated to the shared non-secret mapping
+    /// the popover also uses. A registered provider absent from that mapping reports nothing.
     static func credentialDocumentNames(for providerID: ProviderID) -> [String] {
-        switch providerID.rawValue {
-        case "claude": [".credentials.json"]
-        case "codex": ["auth.json"]
-        case "copilot": ["apps.json", "hosts.json", "oauth.json"]
-        default: []
-        }
+        ProviderCredentialDocuments.names(for: providerID)
     }
 
     static func directoryURL(for profile: ProfileRoot) -> URL {

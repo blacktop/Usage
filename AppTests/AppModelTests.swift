@@ -10,14 +10,15 @@ struct AppModelTests {
     private func model(
         _ provider: any Provider,
         clock: GatedClock,
-        profileRoots: (any ProfileRootStore)? = nil
+        profileRoots: (any ProfileRootStore)? = nil,
+        fileSystem: any ProviderFileSystem = InMemoryFileSystem()
     ) -> AppModel {
         AppModel(
             registry: ProviderRegistry(providers: [provider]),
             context: ProviderContext(
                 http: InMemoryHTTPTransport(),
                 credentials: InMemoryCredentialSource(),
-                fileSystem: InMemoryFileSystem(),
+                fileSystem: fileSystem,
                 clock: clock,
                 interaction: BackgroundInteractionPolicy(),
                 profileRoots: profileRoots
@@ -147,6 +148,43 @@ struct AppModelTests {
         let observed = try await roots.load()
         #expect(observed.profiles.map(\.label).contains("Work"))
         #expect(observed == edited)
+    }
+
+    @Test("A refresh projects every enabled config folder even when sign-in files are missing")
+    func refreshProjectsConfiguredProfiles() async throws {
+        let home = URL(filePath: "/Users/fixture", directoryHint: .isDirectory)
+        var collection = try ProfileRootCollection()
+        try collection.add(
+            providerID: CodexProvider.id,
+            label: "Personal",
+            configurationDirectoryPath: "/Users/fixture/.codex"
+        )
+        try collection.add(
+            providerID: CodexProvider.id,
+            label: "Team",
+            configurationDirectoryPath: "/Users/fixture/.codex-team"
+        )
+        let roots = InMemoryProfileRootStore(homeDirectory: home, profiles: collection)
+        let model = model(
+            CodexProvider(),
+            clock: GatedClock(),
+            profileRoots: roots,
+            fileSystem: InMemoryFileSystem(homeDirectory: home)
+        )
+
+        await model.refreshNow()
+
+        #expect(model.store.accounts.isEmpty)
+        #expect(model.configuredProfiles.map(\.profile.label) == ["Personal", "Team"])
+        #expect(model.configuredProfiles.allSatisfy { !$0.hasCredentialDocument })
+        let section = try #require(
+            PopoverAccountSection.sections(
+                accounts: model.store.accounts,
+                profiles: model.configuredProfiles,
+                registry: model.registry
+            ).first
+        )
+        #expect(section.visibleRowCount == 2)
     }
 
     @Test("The shipped app runs the real providers through the shared profile-root store")

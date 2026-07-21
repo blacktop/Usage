@@ -104,6 +104,7 @@ public struct ClaudeProvider: Provider {
                 identifier: path,
                 path: ClaudeCredentialFile.secretPath
             ),
+            profileRootID: root.id,
             displayName: root.label,
             availability: expired ? .unavailable : .active
         )
