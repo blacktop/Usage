@@ -146,8 +146,11 @@ public struct ProfileRootCollection: Sendable, Equatable, Codable {
             guard ids.insert(profile.id).inserted else {
                 throw .duplicateID(profile.id)
             }
+            let comparisonKey = ProfileRoot.duplicateComparisonKey(
+                for: profile.configurationDirectoryPath
+            )
             let inserted = rootsByProvider[profile.providerID, default: []]
-                .insert(profile.configurationDirectoryPath)
+                .insert(comparisonKey)
             guard inserted.inserted else {
                 throw .duplicateConfigurationDirectory(
                     providerID: profile.providerID,

@@ -91,6 +91,16 @@ public struct ProfileRoot: Sendable, Hashable, Codable, Identifiable {
         return components.isEmpty ? "/" : "/" + components.joined(separator: "/")
     }
 
+    /// Produces a deterministic duplicate-comparison key without changing the stored path.
+    /// A fixed POSIX locale makes case folding host-independent, while canonical composition
+    /// makes canonically equivalent Unicode paths compare equally.
+    static func duplicateComparisonKey(for normalizedPath: String) -> String {
+        normalizedPath
+            .precomposedStringWithCanonicalMapping
+            .folding(options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .precomposedStringWithCanonicalMapping
+    }
+
     private static func normalizeLabel(
         _ label: String,
         configurationDirectoryPath: String

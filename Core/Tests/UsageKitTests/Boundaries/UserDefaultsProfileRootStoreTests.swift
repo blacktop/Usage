@@ -5,7 +5,7 @@ import Testing
 
 @Suite("UserDefaults profile-root store")
 struct UserDefaultsProfileRootStoreTests {
-    @Test("The production suite name is stable and empty injected storage returns defaults")
+    @Test("The production suite name is distinct and empty injected storage returns defaults")
     func emptyStorageSeedsDefaults() async throws {
         let fixture = try DefaultsFixture()
         defer { fixture.remove() }
@@ -16,7 +16,8 @@ struct UserDefaultsProfileRootStoreTests {
 
         let profiles = try await store.load()
 
-        #expect(UserDefaultsProfileRootStore.suiteName == "dev.blacktop.Usage")
+        #expect(UserDefaultsProfileRootStore.suiteName == "dev.blacktop.Usage.shared")
+        #expect(UserDefaultsProfileRootStore.suiteName != "dev.blacktop.Usage")
         #expect(
             profiles.profiles.map(\.configurationDirectoryPath) == [
                 "/Users/injected/.claude",
@@ -24,6 +25,34 @@ struct UserDefaultsProfileRootStoreTests {
                 "/Users/injected/.config/github-copilot",
             ])
         #expect(fixture.defaults.object(forKey: UserDefaultsProfileRootStore.storageKey) == nil)
+    }
+
+    @Test("A disposable named suite constructs, saves, and loads through the production path")
+    func namedSuiteRoundTrips() async throws {
+        let fixture = try DefaultsFixture()
+        defer { fixture.remove() }
+        let homeDirectory = URL(filePath: "/Users/injected")
+        let store = UserDefaultsProfileRootStore(
+            homeDirectory: homeDirectory,
+            suiteName: fixture.suiteName
+        )
+        var profiles = try ProfileRootCollection()
+        try profiles.add(
+            providerID: ProviderID("claude"),
+            label: "Work",
+            configurationDirectoryPath: "/Users/injected/.claude-work"
+        )
+
+        try await store.save(profiles)
+        let reloadedStore = UserDefaultsProfileRootStore(
+            homeDirectory: homeDirectory,
+            suiteName: fixture.suiteName
+        )
+
+        #expect(try await reloadedStore.load() == profiles)
+        #expect(
+            fixture.defaults.data(forKey: UserDefaultsProfileRootStore.storageKey) != nil
+        )
     }
 
     @Test("The store round-trips an unlimited ordered collection including disabled roots")

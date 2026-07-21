@@ -2,7 +2,7 @@ import Foundation
 
 /// A versioned `UserDefaults` store containing only non-secret provider configuration roots.
 public struct UserDefaultsProfileRootStore: ProfileRootStore {
-    public static let suiteName = "dev.blacktop.Usage"
+    public static let suiteName = "dev.blacktop.Usage.shared"
     public static let storageKey = "profileRoots"
 
     private let backing: UserDefaultsBacking
@@ -10,10 +10,11 @@ public struct UserDefaultsProfileRootStore: ProfileRootStore {
 
     /// Creates a crash-free production store backed by the app's preferences suite when available.
     public init(homeDirectory: URL) {
-        self.init(
-            homeDirectory: homeDirectory,
-            suiteDefaults: UserDefaults(suiteName: Self.suiteName)
-        )
+        self.init(homeDirectory: homeDirectory, suiteName: Self.suiteName)
+    }
+
+    init(homeDirectory: URL, suiteName: String) {
+        self.init(homeDirectory: homeDirectory, suiteDefaults: UserDefaults(suiteName: suiteName))
     }
 
     /// Creates a store with isolated preferences supplied by a test or embedding application.

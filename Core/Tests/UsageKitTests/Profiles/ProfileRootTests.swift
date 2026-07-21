@@ -50,34 +50,68 @@ struct ProfileRootTests {
         }
     }
 
-    @Test("Duplicates are provider-scoped after lexical normalization")
+    @Test("Duplicates are provider-scoped and compared case-insensitively")
     func validatesProviderScopedDuplicates() throws {
-        let codex = try ProfileRoot(
-            providerID: ProviderID("codex"),
-            label: "Codex",
-            configurationDirectoryPath: "/profiles/team"
-        )
-        let duplicate = try ProfileRoot(
-            providerID: ProviderID("codex"),
-            label: "Duplicate",
-            configurationDirectoryPath: "/profiles/other/../team/"
-        )
         let claude = try ProfileRoot(
             providerID: ProviderID("claude"),
             label: "Claude",
-            configurationDirectoryPath: "/profiles/team"
+            configurationDirectoryPath: "/Users/x/.claude"
+        )
+        let duplicate = try ProfileRoot(
+            providerID: ProviderID("claude"),
+            label: "Duplicate",
+            configurationDirectoryPath: "/Users/x/profiles/../.Claude/"
+        )
+        let distinct = try ProfileRoot(
+            providerID: ProviderID("claude"),
+            label: "Claude Team",
+            configurationDirectoryPath: "/Users/x/.claude-team"
+        )
+        let codex = try ProfileRoot(
+            providerID: ProviderID("codex"),
+            label: "Codex",
+            configurationDirectoryPath: "/Users/x/.claude"
         )
 
         #expect(
             throws: ProfileRootValidationError.duplicateConfigurationDirectory(
-                providerID: ProviderID("codex"),
-                path: "/profiles/team"
+                providerID: ProviderID("claude"),
+                path: "/Users/x/.Claude"
             )
         ) {
-            try ProfileRootCollection(profiles: [codex, duplicate])
+            try ProfileRootCollection(profiles: [claude, duplicate])
         }
-        let crossProvider = try ProfileRootCollection(profiles: [codex, claude])
-        #expect(crossProvider.profiles.count == 2)
+        let valid = try ProfileRootCollection(profiles: [claude, distinct, codex])
+        #expect(valid.profiles.count == 3)
+        #expect(valid.profiles[0].configurationDirectoryPath == "/Users/x/.claude")
+        #expect(valid.profiles[1].configurationDirectoryPath == "/Users/x/.claude-team")
+    }
+
+    @Test("Canonical Unicode variants conflict without rewriting stored paths")
+    func validatesUnicodeNormalizedDuplicates() throws {
+        let composedPath = "/profiles/caf\u{00E9}"
+        let decomposedPath = "/profiles/CAF\u{0065}\u{0301}"
+        let composed = try ProfileRoot(
+            providerID: ProviderID("claude"),
+            label: "Composed",
+            configurationDirectoryPath: composedPath
+        )
+        let decomposed = try ProfileRoot(
+            providerID: ProviderID("claude"),
+            label: "Decomposed",
+            configurationDirectoryPath: decomposedPath
+        )
+
+        #expect(composed.configurationDirectoryPath == composedPath)
+        #expect(decomposed.configurationDirectoryPath == decomposedPath)
+        #expect(
+            throws: ProfileRootValidationError.duplicateConfigurationDirectory(
+                providerID: ProviderID("claude"),
+                path: decomposedPath
+            )
+        ) {
+            try ProfileRootCollection(profiles: [composed, decomposed])
+        }
     }
 
     @Test("More than fifty roots remain editable, ordered, and stably identified")
