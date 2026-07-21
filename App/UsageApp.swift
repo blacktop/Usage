@@ -24,7 +24,9 @@ struct UsageApp: App {
         MenuBarExtra {
             PopoverRoot(lifecycle: lifecycle, model: model)
         } label: {
-            MenuBarLabel(worstFraction: MenuBarLabel.worstFraction(in: model.store.accounts))
+            MenuBarLabel(
+                remainingFraction: MenuBarLabel.leastRemainingFraction(in: model.store.accounts)
+            )
         }
         .menuBarExtraStyle(.window)
 

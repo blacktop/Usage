@@ -54,18 +54,20 @@ struct AppModelTests {
         #expect(model.store.accounts.map(\.account.key) == first)
     }
 
-    @Test("The menu bar label reports the worst fraction across every account")
-    func menuBarLabelUsesWorstFraction() async throws {
+    @Test("The menu bar label reports the least capacity left across every account")
+    func menuBarLabelUsesLeastRemainingFraction() async throws {
         let model = model(UsageKit.PreviewProvider(), clock: GatedClock())
-        #expect(MenuBarLabel.worstFraction(in: model.store.accounts) == nil)
+        #expect(MenuBarLabel.leastRemainingFraction(in: model.store.accounts) == nil)
 
         await model.refreshNow()
 
-        let worst = try #require(MenuBarLabel.worstFraction(in: model.store.accounts))
+        let least = try #require(
+            MenuBarLabel.leastRemainingFraction(in: model.store.accounts)
+        )
         let everyFraction = model.store.accounts.compactMap(\.report).flatMap(\.windows)
-            .map(\.usedFraction)
-        #expect(worst == everyFraction.max())
-        #expect(worst > 1, "the preview data must include an over-quota window")
+            .map(\.remainingFraction)
+        #expect(least == everyFraction.min())
+        #expect(least == 0, "an over-quota window has no remaining capacity")
     }
 
     @Test("A failed refresh leaves the previously rendered report in place")

@@ -51,6 +51,12 @@ public struct UsageWindow: Sendable, Hashable, Codable, Identifiable {
     /// `usedFraction` limited to `0...1` for progress rendering. The stored value stays untouched.
     public var renderFraction: Double { min(1, max(0, usedFraction)) }
 
+    /// Capacity still available, clamped at zero once a window is exhausted or over quota.
+    ///
+    /// Providers, persistence, and history continue to speak in consumption. User-facing meters
+    /// use this inverse so a freshly reset allowance reads as 100% left.
+    public var remainingFraction: Double { max(0, 1 - usedFraction) }
+
     private enum CodingKeys: String, CodingKey {
         case id, kind, label, usedFraction, resetsAt, duration, detail
     }

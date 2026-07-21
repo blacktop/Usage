@@ -44,11 +44,11 @@ struct CodexRenderingTests {
 
         #expect(
             rendered == """
-                PROVIDER  ACCOUNT  PLAN  WINDOW               USED  RESETS
-                codex     Codex    pro   Session               22%  5h 1m
-                codex     Codex    pro   Weekly                43%  5d 12h
-                codex     Codex    pro   GPT-5.3-Codex-Spark   30%  5h 1m
-                codex     Codex    pro   GPT-5.3-Codex-Spark  100%  5d 12h
+                PROVIDER  ACCOUNT  PLAN  WINDOW               LEFT  RESETS
+                codex     Codex    pro   Session               78%  5h 1m
+                codex     Codex    pro   Weekly                57%  5d 12h
+                codex     Codex    pro   GPT-5.3-Codex-Spark   70%  5h 1m
+                codex     Codex    pro   GPT-5.3-Codex-Spark    0%  5d 12h
 
                 PROVIDER  ACCOUNT  CREDITS
                 codex     Codex    14.5
@@ -140,7 +140,7 @@ struct CodexRenderingTests {
 
         #expect(rendered.contains("5c5cd4db0261"))
         #expect(!rendered.contains("/Users/secret"))
-        #expect(rendered.contains("150%"))
+        #expect(rendered.contains("0%"))
     }
 
     @Test("a run with nothing at all to say still says so")

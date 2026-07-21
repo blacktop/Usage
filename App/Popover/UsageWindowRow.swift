@@ -1,7 +1,7 @@
 import SwiftUI
 import UsageKit
 
-/// One usage window: label, absolute detail, a bar clamped for rendering, and its reset time.
+/// One usage window: label, capacity left, absolute detail, and its reset time.
 struct UsageWindowRow: View {
     let window: UsageWindow
 
@@ -11,11 +11,11 @@ struct UsageWindowRow: View {
                 Text(window.label)
                     .font(.caption)
                 Spacer()
-                Text(Self.percentText(window.usedFraction))
+                Text(Self.percentText(window.remainingFraction))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(Self.tint(for: window.usedFraction))
             }
-            ProgressView(value: window.renderFraction)
+            ProgressView(value: window.remainingFraction)
                 .progressViewStyle(.linear)
                 .tint(Self.tint(for: window.usedFraction))
             if let footnote = Self.footnote(for: window) {
@@ -26,10 +26,9 @@ struct UsageWindowRow: View {
         }
     }
 
-    /// The stored fraction is shown verbatim so an over-quota window reads as over quota; only
-    /// the bar is clamped.
+    /// The word "left" makes the inversion from the provider's consumed percentage unambiguous.
     private static func percentText(_ fraction: Double) -> String {
-        fraction.formatted(.percent.precision(.fractionLength(0)))
+        fraction.formatted(.percent.precision(.fractionLength(0))) + " left"
     }
 
     private static func tint(for fraction: Double) -> Color {

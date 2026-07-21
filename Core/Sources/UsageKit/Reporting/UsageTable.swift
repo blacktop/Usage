@@ -17,7 +17,7 @@ public enum UsageTable {
         } else {
             sections.append(
                 TextTable.render(
-                    header: ["PROVIDER", "ACCOUNT", "PLAN", "WINDOW", "USED", "RESETS"],
+                    header: ["PROVIDER", "ACCOUNT", "PLAN", "WINDOW", "LEFT", "RESETS"],
                     rows: windows,
                     alignment: [.leading, .leading, .leading, .leading, .trailing, .leading]
                 )
@@ -38,7 +38,7 @@ public enum UsageTable {
                     label(for: collected),
                     collected.report.plan ?? absent,
                     window.label,
-                    percentage(window.usedFraction),
+                    percentage(window.remainingFraction),
                     window.resetsAt.map { RelativeTime.short(from: now, to: $0) } ?? absent,
                 ]
             }
@@ -103,8 +103,7 @@ public enum UsageTable {
             ?? String(collected.report.accountKey.accountID.digest.prefix(digestPrefixLength))
     }
 
-    /// Rounded to whole percent. Values above 100 are printed as they are: an over-quota account is
-    /// exactly the case a clamp would hide.
+    /// Remaining capacity rounded to whole percent. Exhausted and over-quota windows both read 0%.
     private static func percentage(_ fraction: Double) -> String {
         "\(Int((fraction * 100).rounded()))%"
     }

@@ -49,6 +49,14 @@ struct MapperValidationTests {
         #expect(try window(12).renderFraction == 1)
     }
 
+    @Test("Remaining capacity inverts usage and floors exhausted or over-quota windows at zero")
+    func remainingFractionInvertsUsage() throws {
+        #expect(try window(0).remainingFraction == 1)
+        #expect(try window(0.25).remainingFraction == 0.75)
+        #expect(try window(1).remainingFraction == 0)
+        #expect(try window(1.4).remainingFraction == 0)
+    }
+
     @Test("Negative counts are rejected on either side of the ratio")
     func negativeCountsAreRejected() {
         #expect(throws: UsageError.invalidValue(field: "detail.limit", rule: .nonNegative)) {
