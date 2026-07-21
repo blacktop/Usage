@@ -1,0 +1,7 @@
+{
+  "type": "error",
+  "error": {
+    "type": "authentication_error",
+    "message": "OAuth authentication failed for token sk-ant-oat01-FAKE-ACCESS-TOKEN-DO-NOT-USE-0000000000."
+  }
+}

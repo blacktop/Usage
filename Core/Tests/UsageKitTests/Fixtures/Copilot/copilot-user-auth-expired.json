@@ -1,0 +1,5 @@
+{
+  "message": "Bad credentials for gho_FIXTURE0000000000000000000000000001",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "401"
+}

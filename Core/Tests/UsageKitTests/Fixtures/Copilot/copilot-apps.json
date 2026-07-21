@@ -1,0 +1,15 @@
+{
+  "Iv1.b507a08c87ecfe98:github.com": {
+    "user": "fixture-user-one",
+    "oauth_token": "gho_FIXTURE0000000000000000000000000001",
+    "githubAppId": "Iv1.b507a08c87ecfe98"
+  },
+  "Iv1.b507a08c87ecfe98:octofixture.ghe.com": {
+    "user": "fixture-user-two",
+    "oauth_token": "gho_FIXTURE0000000000000000000000000002",
+    "githubAppId": "Iv1.b507a08c87ecfe98"
+  },
+  "Iv1.b507a08c87ecfe98:broken.example": {
+    "user": "fixture-user-broken"
+  }
+}

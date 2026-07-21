@@ -1,0 +1,7 @@
+{
+  "detail": {
+    "code": "token_expired",
+    "message": "Your authentication token has expired. Token FAKE-sk-proj-AAAABBBBCCCCDDDD was issued for account acct_FAKE0000000000000001.",
+    "type": "invalid_request_error"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "copilot_plan": "business",
+  "quota_reset_date": "2026-09-01",
+  "quota_snapshots": {
+    "premium_interactions": {
+      "entitlement": 1000,
+      "remaining": 250,
+      "percent_remaining": 25,
+      "quota_id": "premium_interactions"
+    },
+    "chat": "this-element-is-a-string-not-an-object",
+    "spark_premium_interactions": {
+      "entitlement": "not-a-number",
+      "remaining": null,
+      "percent_remaining": [1, 2, 3],
+      "quota_id": 12345,
+      "unlimited": "yes"
+    },
+    "code_review": {
+      "entitlement": 40,
+      "remaining": 10,
+      "quota_id": "code_review"
+    }
+  },
+  "monthly_quotas": {
+    "chat": "unbounded"
+  },
+  "limited_user_quotas": {
+    "chat": 7
+  }
+}

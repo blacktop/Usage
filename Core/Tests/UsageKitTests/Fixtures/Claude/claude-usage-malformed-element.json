@@ -1,0 +1,32 @@
+{
+  "five_hour": { "utilization": 11.0, "resets_at": "2026-07-20T18:30:00.000Z" },
+  "seven_day": { "utilization": 9.0, "resets_at": "2026-07-24T09:00:00.000Z" },
+  "limits": [
+    "garbage-not-an-object",
+    {
+      "kind": "weekly_scoped", "group": "weekly", "percent": 5.0,
+      "resets_at": "2026-07-24T09:00:00.000Z",
+      "scope": { "model": { "id": "fake-model-a", "display_name": "Fable" } },
+      "is_active": false
+    },
+    {
+      "kind": "weekly_scoped", "group": "weekly", "percent": "not-a-number",
+      "resets_at": 12345,
+      "scope": "this-should-be-an-object",
+      "is_active": "maybe"
+    },
+    {
+      "kind": "weekly_scoped", "group": "weekly", "percent": 22.5,
+      "resets_at": "2026-07-24T09:00:00.000Z",
+      "scope": { "model": { "id": "fake-model-b", "display_name": "Teapot" } },
+      "is_active": false
+    },
+    {
+      "kind": "weekly_scoped", "group": "weekly", "percent": 3.0,
+      "resets_at": "2026-07-24T09:00:00.000Z",
+      "scope": { "model": { "id": "fake-all-models", "display_name": "All models" } },
+      "is_active": true
+    }
+  ],
+  "seven_day_sonnet": { "utilization": "corrupt" }
+}

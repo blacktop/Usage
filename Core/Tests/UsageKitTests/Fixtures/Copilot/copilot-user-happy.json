@@ -1,0 +1,36 @@
+{
+  "copilot_plan": "individual",
+  "token_based_billing": false,
+  "assigned_date": "2026-01-15",
+  "quota_reset_date": "2026-08-01T00:00:00Z",
+  "quota_snapshots": {
+    "premium_interactions": {
+      "entitlement": 300,
+      "remaining": 72,
+      "percent_remaining": 24,
+      "quota_id": "premium_interactions",
+      "unlimited": false
+    },
+    "chat": {
+      "entitlement": 500,
+      "remaining": 450,
+      "percent_remaining": 90,
+      "quota_id": "chat",
+      "unlimited": false
+    },
+    "completions": {
+      "entitlement": 0,
+      "remaining": 0,
+      "quota_id": "completions",
+      "unlimited": true
+    }
+  },
+  "monthly_quotas": {
+    "chat": 500,
+    "completions": 1000
+  },
+  "limited_user_quotas": {
+    "chat": 450,
+    "completions": 250
+  }
+}

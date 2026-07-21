@@ -1,0 +1,27 @@
+{
+  "plan_type": "pro",
+  "additional_rate_limits": [
+    {
+      "limit_name": "Requests",
+      "metered_feature": "code_review",
+      "rate_limit": {
+        "primary_window": {
+          "used_percent": 10,
+          "reset_at": 1767407914,
+          "limit_window_seconds": 604800
+        }
+      }
+    },
+    {
+      "limit_name": "Tokens",
+      "metered_feature": "code_review",
+      "rate_limit": {
+        "primary_window": {
+          "used_percent": 95,
+          "reset_at": 1767407914,
+          "limit_window_seconds": 604800
+        }
+      }
+    }
+  ]
+}

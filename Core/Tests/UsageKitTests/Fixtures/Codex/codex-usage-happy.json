@@ -1,0 +1,50 @@
+{
+  "plan_type": "pro",
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {
+      "used_percent": 22,
+      "reset_at": 1766948068,
+      "limit_window_seconds": 18000,
+      "reset_after_seconds": 12345
+    },
+    "secondary_window": {
+      "used_percent": 43,
+      "reset_at": 1767407914,
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 56789
+    },
+    "individual_limit": {
+      "limit": 100000,
+      "used": "7761",
+      "remaining_percent": 92.239,
+      "resets_at": 1782864000
+    }
+  },
+  "credits": {
+    "has_credits": true,
+    "unlimited": false,
+    "balance": "14.5"
+  },
+  "additional_rate_limits": [
+    {
+      "limit_name": "GPT-5.3-Codex-Spark",
+      "metered_feature": "gpt_5_3_codex_spark",
+      "rate_limit": {
+        "allowed": true,
+        "limit_reached": false,
+        "primary_window": {
+          "used_percent": 30,
+          "reset_at": 1766948068,
+          "limit_window_seconds": 18000
+        },
+        "secondary_window": {
+          "used_percent": 100,
+          "reset_at": 1767407914,
+          "limit_window_seconds": 604800
+        }
+      }
+    }
+  ]
+}

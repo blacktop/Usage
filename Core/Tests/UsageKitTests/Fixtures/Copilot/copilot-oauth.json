@@ -1,0 +1,9 @@
+{
+  "cli.github.example": {
+    "login": "fixture-user-cli",
+    "access_token": "gho_FIXTURE0000000000000000000000000005"
+  },
+  "unusable.github.example": {
+    "login": "fixture-user-tokenless"
+  }
+}

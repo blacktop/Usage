@@ -1,0 +1,10 @@
+{
+  "github.com": {
+    "user": "fixture-user-legacy",
+    "oauth_token": "gho_FIXTURE0000000000000000000000000003"
+  },
+  "legacy.ghe.example": {
+    "user": "fixture-user-legacy-enterprise",
+    "oauth_token": "gho_FIXTURE0000000000000000000000000004"
+  }
+}

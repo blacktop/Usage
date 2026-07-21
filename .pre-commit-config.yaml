@@ -1,0 +1,25 @@
+exclude: '^OPC/'
+
+repos:
+  - repo: local
+    hooks:
+      - id: swift-format-lint
+        name: swift-format lint
+        entry: xcrun swift-format lint --strict --parallel
+        language: system
+        types: [swift]
+        files: '^(App|AppTests|Core/Sources|Core/Tests)/'
+
+      - id: line-length
+        name: 100-column limit
+        entry: just line-length
+        language: system
+        pass_filenames: false
+        files: '^(App|AppTests|Core/Sources|Core/Tests)/.*\.swift$'
+
+      - id: core-build
+        name: swift build (Core)
+        entry: swift build --package-path Core --only-use-versions-from-resolved-file
+        language: system
+        pass_filenames: false
+        files: '^Core/'

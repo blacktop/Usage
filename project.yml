@@ -1,0 +1,71 @@
+name: Usage
+
+# Source roots are listed explicitly. `OPC/` is a read-only reference clone and is never
+# scanned, referenced, built, or formatted by this project.
+
+options:
+  minimumXcodeGenVersion: "2.46.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+  defaultConfig: Debug
+  groupSortPosition: top
+
+configs:
+  Debug: debug
+  Release: release
+
+configFiles:
+  Debug: Config/Debug.xcconfig
+  Release: Config/Release.xcconfig
+
+fileGroups:
+  - Config
+  - Justfile
+  - project.yml
+
+packages:
+  UsageCore:
+    path: Core
+
+targets:
+  Usage:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    dependencies:
+      - package: UsageCore
+        product: UsageKit
+    configFiles:
+      Debug: Config/Debug.xcconfig
+      Release: Config/Release.xcconfig
+
+  UsageAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: AppTests
+    dependencies:
+      - target: Usage
+    configFiles:
+      Debug: Config/Tests.xcconfig
+      Release: Config/Tests.xcconfig
+
+schemes:
+  Usage:
+    build:
+      targets:
+        Usage: all
+        UsageAppTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - UsageAppTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

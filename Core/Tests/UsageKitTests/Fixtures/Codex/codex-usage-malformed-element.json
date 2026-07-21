@@ -1,0 +1,23 @@
+{
+  "plan_type": "plus",
+  "rate_limit": {
+    "primary_window": { "used_percent": 22, "reset_at": 1766948068, "limit_window_seconds": 18000 },
+    "secondary_window": { "used_percent": 43, "reset_at": 1767407914, "limit_window_seconds": 604800 }
+  },
+  "additional_rate_limits": [
+    "garbage-not-an-object",
+    {
+      "limit_name": "GPT-5.3-Codex-Spark",
+      "metered_feature": "gpt_5_3_codex_spark",
+      "rate_limit": {
+        "primary_window": { "used_percent": 30, "reset_at": 1766948068, "limit_window_seconds": 18000 }
+      }
+    },
+    42,
+    {
+      "limit_name": "Broken Limit",
+      "metered_feature": "broken_limit",
+      "rate_limit": { "primary_window": { "used_percent": "not-a-number", "reset_at": null } }
+    }
+  ]
+}

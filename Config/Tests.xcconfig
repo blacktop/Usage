@@ -1,0 +1,7 @@
+// Target-level overrides for the UsageAppTests bundle. Everything else falls back to the
+// project-level Debug/Release configuration file.
+
+PRODUCT_BUNDLE_IDENTIFIER = dev.blacktop.UsageAppTests
+INFOPLIST_FILE =
+GENERATE_INFOPLIST_FILE = YES
+CODE_SIGN_ENTITLEMENTS =

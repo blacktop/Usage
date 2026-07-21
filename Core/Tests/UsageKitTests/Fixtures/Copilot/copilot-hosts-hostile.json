@@ -1,0 +1,18 @@
+{
+  "ghe.corp@evil.example": {
+    "user": "fixture-user-userinfo",
+    "oauth_token": "gho_FIXTURE0000000000000000000000000006"
+  },
+  "evil.example?x=1": {
+    "user": "fixture-user-query",
+    "oauth_token": "gho_FIXTURE0000000000000000000000000007"
+  },
+  "evil.example#f": {
+    "user": "fixture-user-fragment",
+    "oauth_token": "gho_FIXTURE0000000000000000000000000008"
+  },
+  "github.com": {
+    "user": "fixture-user-legacy",
+    "oauth_token": "gho_FIXTURE0000000000000000000000000003"
+  }
+}
