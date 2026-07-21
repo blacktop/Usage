@@ -9,7 +9,7 @@ struct CopilotProviderTests {
     private static let githubKey = "Iv1.b507a08c87ecfe98:github.com"
 
     private static func url(_ fileName: String) -> URL {
-        CopilotCredentialFiles.url(home: ProviderFixtures.home, fileName: fileName)
+        CopilotCredentialFiles.url(root: ProviderFixtures.copilotRoot, fileName: fileName)
     }
 
     private static func locator(
@@ -42,9 +42,12 @@ struct CopilotProviderTests {
         let accounts = try await CopilotProvider().discoverAccounts(using: context)
 
         #expect(accounts.count == 2)
-        #expect(Set(accounts.compactMap(\.displayName)).contains("fixture-user-one@github.com"))
         #expect(
-            Set(accounts.compactMap(\.displayName)).contains("fixture-user-two@octofixture.ghe.com")
+            accounts.allSatisfy { $0.displayName == "Copilot" },
+            "the configured label names every account the root yields"
+        )
+        #expect(
+            accounts.map(CopilotProvider.host(of:)) == ["github.com", "octofixture.ghe.com"]
         )
         #expect(Set(accounts.map(\.key)).count == 2)
         #expect(accounts.allSatisfy { $0.key.accountID.derivation == .credentialSlot })
@@ -72,7 +75,7 @@ struct CopilotProviderTests {
         let hostsAccount = try #require(
             accounts.first { $0.slot.source == "copilot.hosts.json" }
         )
-        #expect(hostsAccount.slot.opaqueID == "legacy.ghe.example")
+        #expect(CopilotProvider.host(of: hostsAccount) == "legacy.ghe.example")
         let cliAccount = try #require(accounts.first { $0.slot.source == "copilot.oauth.json" })
         #expect(cliAccount.locator.path == ["cli.github.example", "access_token"])
     }
@@ -119,7 +122,7 @@ struct CopilotProviderTests {
 
         let accounts = try await CopilotProvider().discoverAccounts(using: context)
 
-        #expect(accounts.map(\.slot.opaqueID) == ["github.com"])
+        #expect(accounts.map(CopilotProvider.host(of:)) == ["github.com"])
         #expect(http.recordedRequests.isEmpty)
     }
 
@@ -360,7 +363,7 @@ struct CopilotProviderTests {
 
         let account = try #require(
             try await CopilotProvider().discoverAccounts(using: context)
-                .first { $0.slot.opaqueID == Self.githubKey }
+                .first { $0.locator.path.first == Self.githubKey }
         )
         _ = try await CopilotProvider().fetchUsage(for: account, using: context)
 
@@ -396,7 +399,7 @@ struct CopilotProviderTests {
         )
         let account = try #require(
             try await CopilotProvider().discoverAccounts(using: context)
-                .first { $0.slot.opaqueID == Self.githubKey }
+                .first { $0.locator.path.first == Self.githubKey }
         )
 
         await #expect(throws: UsageError.interactionForbidden()) {
@@ -431,7 +434,7 @@ struct CopilotProviderTests {
         )
         let account = try #require(
             try await CopilotProvider().discoverAccounts(using: context)
-                .first { $0.slot.opaqueID == Self.githubKey }
+                .first { $0.locator.path.first == Self.githubKey }
         )
         return (account, context)
     }

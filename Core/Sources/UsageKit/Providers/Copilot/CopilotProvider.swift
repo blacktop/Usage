@@ -1,7 +1,7 @@
 import Foundation
 
-/// GitHub Copilot, read through the credential files the Copilot editor plugin and CLI keep under
-/// `~/.config/github-copilot`.
+/// GitHub Copilot, read through the credential files the Copilot editor plugin and CLI keep in
+/// their configuration directory, one directory per configured root.
 ///
 /// Read-only: Usage runs no device flow, writes no Keychain item, and never rewrites those files.
 /// The `gho_` tokens they hold have no refresh token, so there would be nothing to refresh even if
@@ -23,25 +23,36 @@ public struct CopilotProvider: Provider {
 
     public init() {}
 
-    /// Enumerates every entry across the credential files, most authoritative file first.
-    ///
-    /// One GitHub host appears in at most one account: `apps.json` beats `hosts.json` beats
-    /// `oauth.json`, matching the order the tools themselves migrated through.
+    /// Every usable credential entry below every enabled configured root, in root order.
     public func discoverAccounts(using context: ProviderContext) async throws -> [ProviderAccount] {
+        var accounts: [ProviderAccount] = []
+        for root in try await context.enabledProfileRoots(for: Self.id) {
+            accounts.append(contentsOf: Self.accounts(in: root, using: context))
+        }
+        return accounts
+    }
+
+    /// One root's entries, most authoritative file first.
+    ///
+    /// A GitHub host appears in at most one account per root: `apps.json` beats `hosts.json` beats
+    /// `oauth.json`, matching the order the tools themselves migrated through. Precedence is scoped
+    /// to the root and not to the whole run, because two roots both holding `github.com` are two
+    /// configured accounts, not the same entry seen twice.
+    private static func accounts(
+        in root: ProfileRootLocation,
+        using context: ProviderContext
+    ) -> [ProviderAccount] {
         var accounts: [ProviderAccount] = []
         var claimedHosts: Set<String> = []
         for fileName in CopilotCredentialFiles.fileNames {
-            let url = CopilotCredentialFiles.url(
-                home: context.fileSystem.homeDirectory,
-                fileName: fileName
-            )
+            let url = CopilotCredentialFiles.url(root: root.directory, fileName: fileName)
             guard context.fileSystem.fileExists(at: url),
                 let data = try? context.fileSystem.read(contentsOf: url)
             else { continue }
             for slot in CopilotCredentialFiles.slots(in: data, fileName: fileName)
-            where !claimedHosts.contains(slot.host) && Self.usageURL(host: slot.host) != nil {
+            where !claimedHosts.contains(slot.host) && usageURL(host: slot.host) != nil {
                 claimedHosts.insert(slot.host)
-                accounts.append(Self.account(for: slot, at: url))
+                accounts.append(account(for: slot, at: url, label: root.label))
             }
         }
         return accounts
@@ -121,15 +132,27 @@ public struct CopilotProvider: Provider {
 
     /// Recovers the GitHub host from the account descriptor, which is the only thing carried
     /// forward from discovery.
+    ///
+    /// The entry's own key is the locator's first path component. The slot identifier cannot be
+    /// used for this: it qualifies that key with the file's path so that the same host under two
+    /// configured roots stays two accounts.
     static func host(of account: ProviderAccount) -> String {
         let fileName = String(account.slot.source.dropFirst(slotSourcePrefix.count))
-        return CopilotCredentialFiles.host(forKey: account.slot.opaqueID, fileName: fileName)
+        return CopilotCredentialFiles.host(
+            forKey: account.locator.path.first ?? "",
+            fileName: fileName
+        )
     }
 
-    private static func account(for slot: CopilotCredentialSlot, at url: URL) -> ProviderAccount {
+    private static func account(
+        for slot: CopilotCredentialSlot,
+        at url: URL,
+        label: String
+    ) -> ProviderAccount {
+        let path = url.standardizedFileURL.path(percentEncoded: false)
         let slotID = CredentialSlotID(
             source: slotSourcePrefix + slot.fileName,
-            opaqueID: slot.mapKey
+            opaqueID: "\(path)#\(slot.mapKey)"
         )
         return ProviderAccount(
             key: AccountKey(
@@ -139,10 +162,10 @@ public struct CopilotProvider: Provider {
             slot: slotID,
             locator: CredentialLocator(
                 kind: .file,
-                identifier: url.standardizedFileURL.path(percentEncoded: false),
+                identifier: path,
                 path: [slot.mapKey, slot.tokenField]
             ),
-            displayName: slot.login.map { "\($0)@\(slot.host)" },
+            displayName: label,
             availability: .active
         )
     }

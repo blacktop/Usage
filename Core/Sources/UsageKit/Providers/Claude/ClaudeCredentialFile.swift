@@ -29,9 +29,11 @@ enum ClaudeCredentialFile {
     static let keychainService = "Claude Code-credentials"
     /// Where the bearer token sits inside the document, for `CredentialSource` to resolve.
     static let secretPath = ["claudeAiOauth", "accessToken"]
+    /// The one document Claude discovery reads, directly below a configured root.
+    static let documentName = ".credentials.json"
 
-    static func url(home: URL) -> URL {
-        home.appending(path: ".claude/.credentials.json", directoryHint: .notDirectory)
+    static func url(root: URL) -> URL {
+        root.appending(path: documentName, directoryHint: .notDirectory)
     }
 
     /// Parses the document, requiring a subscription OAuth token.

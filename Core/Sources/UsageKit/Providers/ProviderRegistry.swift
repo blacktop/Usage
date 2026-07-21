@@ -39,21 +39,19 @@ public struct ProviderRegistry: Sendable {
 
     /// Every provider implementation that exists. Adding a provider is this line and nothing else.
     ///
-    /// Implemented is not the same as enabled: this list is what the contract tests enumerate, not
-    /// what a host runs.
+    /// Whether a provider reports anything is decided by configuration, not by registration: a
+    /// registered provider with no enabled root discovers nothing.
     public static let agents = ProviderRegistry(
         providers: [CodexProvider(), ClaudeProvider(), CopilotProvider()]
     )
 
-    /// The providers the shipped CLI runs.
+    /// The providers a shipped host runs.
     ///
-    /// Claude and Copilot are Phase 5 work, and Claude additionally waits on the Keychain
-    /// feasibility gate — an explicit user approval this build does not have. Keychain access is a
-    /// per-host capability, so the CLI's registry is separate from the app's rather than shared.
-    /// Until the gate is recorded an unapproved provider is absent here, which means `usage` reads
-    /// neither `Claude Code-credentials` nor `~/.config/github-copilot` and contacts neither
-    /// endpoint, rather than being present and failing at the credential.
-    public static let commandLine = ProviderRegistry(providers: [CodexProvider()])
+    /// The same list as `agents`, and named separately only because the CLI reads it under that
+    /// name. There is nothing left to gate on: every account comes from a root the user configured
+    /// and every credential from a file below it, so no provider needs a per-host capability the
+    /// app has and the CLI does not.
+    public static let commandLine = agents
 }
 
 /// Requested identifiers that name no registered provider.

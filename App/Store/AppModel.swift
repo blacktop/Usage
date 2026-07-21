@@ -12,6 +12,12 @@ import UsageKit
 @MainActor
 final class AppModel {
     let store: UsageStore
+    /// The very store the coordinator's context discovers through.
+    ///
+    /// Held rather than rebuilt so that editing a root and rediscovering are the same store: a
+    /// second `UserDefaultsProfileRootStore` would be a second view of the same suite, and a
+    /// Settings edit made against it would race the refresh that is supposed to observe it.
+    @ObservationIgnored let profileRoots: any ProfileRootStore
 
     @ObservationIgnored private let coordinator: RefreshCoordinator
     @ObservationIgnored private var lifecycle: RefreshLifecycle?
@@ -24,6 +30,7 @@ final class AppModel {
     ) {
         let store = UsageStore()
         self.store = store
+        profileRoots = context.profileRoots
         coordinator = RefreshCoordinator(
             registry: registry,
             context: context,
@@ -32,17 +39,13 @@ final class AppModel {
         )
     }
 
-    /// The app's own wiring: the Codex vertical slice plus the synthetic preview accounts.
+    /// The app's own wiring: every implemented provider, discovering through the shared
+    /// profile-root suite and nothing else.
     ///
-    /// Registry membership is per host, because Keychain access is. Claude additionally waits on
-    /// the Keychain feasibility gate, which is an explicit user approval this build does not have,
-    /// so neither it nor Copilot is here yet — the same reason `ProviderRegistry.commandLine`
-    /// holds only Codex.
+    /// No `PreviewProvider`: its three synthetic accounts belong to the suites that exercise the
+    /// store and the popover, not to a shipped menu bar showing a user their real quota.
     static func live() -> AppModel {
-        AppModel(
-            registry: ProviderRegistry(providers: [CodexProvider(), UsageKit.PreviewProvider()]),
-            context: .system()
-        )
+        AppModel(registry: .agents, context: .system())
     }
 
     /// Discovers accounts, runs the first refresh, and starts listening for sleep and wake.

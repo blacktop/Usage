@@ -1,6 +1,6 @@
 import Foundation
 
-/// Codex / ChatGPT, read through the Codex CLI's own `~/.codex/auth.json`.
+/// Codex / ChatGPT, read through the Codex CLI's own `auth.json`, one per configured root.
 ///
 /// Read-only: Usage never refreshes the OAuth token, never rewrites `auth.json`, and never runs the
 /// `codex` binary. An expired credential surfaces `.authenticationExpired` carrying `codex login`,
@@ -22,15 +22,21 @@ public struct CodexProvider: Provider {
 
     public init() {}
 
-    /// The credential file, and only the credential file.
+    /// One account per enabled configured root that holds an `auth.json`.
     ///
-    /// A `Codex Auth` Keychain item exists on some machines, but nothing documents its payload
-    /// format and the Codex CLI reference never reads it. Treating it as another `auth.json` was a
-    /// guess: a wrong guess sends an unrecognised payload as a bearer token, and being right would
-    /// still buy nothing, since an attributes-only query cannot recover the `account_id` that
-    /// addresses the right workspace. Reinstate it only with a verified format.
+    /// The credential file, and only the credential file. A `Codex Auth` Keychain item exists on
+    /// some machines, but nothing documents its payload format and the Codex CLI reference never
+    /// reads it. Treating it as another `auth.json` was a guess: a wrong guess sends an
+    /// unrecognised payload as a bearer token, and being right would still buy nothing, since an
+    /// attributes-only query cannot recover the `account_id` that addresses the right workspace,
+    /// nor say which configured root the item belongs to. Reinstate it only with a verified format.
     public func discoverAccounts(using context: ProviderContext) async throws -> [ProviderAccount] {
-        Self.fileAccounts(using: context)
+        var accounts: [ProviderAccount] = []
+        for root in try await context.enabledProfileRoots(for: Self.id) {
+            guard let account = Self.account(in: root, using: context) else { continue }
+            accounts.append(account)
+        }
+        return accounts
     }
 
     public func fetchUsage(
@@ -106,12 +112,20 @@ public struct CodexProvider: Provider {
         }
     }
 
-    private static func fileAccounts(using context: ProviderContext) -> [ProviderAccount] {
-        let url = CodexAuthFile.url(home: context.fileSystem.homeDirectory)
+    /// The account one root describes, or nothing at all when the root holds no `auth.json`.
+    ///
+    /// A root without the file is not an unusable account, it is a root Codex was never signed in
+    /// under. A file that is present but unparsable is the opposite: a slot that exists and cannot
+    /// be used, which is worth showing.
+    private static func account(
+        in root: ProfileRootLocation,
+        using context: ProviderContext
+    ) -> ProviderAccount? {
+        let url = CodexAuthFile.url(root: root.directory)
         guard context.fileSystem.fileExists(at: url),
             let data = try? context.fileSystem.read(contentsOf: url)
-        else { return [] }
-        return [account(at: url, metadata: try? CodexAuthFile.parse(data))]
+        else { return nil }
+        return account(at: url, label: root.label, metadata: try? CodexAuthFile.parse(data))
     }
 
     /// Re-reads the credential file for the request's non-secret metadata.
@@ -129,7 +143,17 @@ public struct CodexProvider: Provider {
         return try? CodexAuthFile.parse(data)
     }
 
-    private static func account(at url: URL, metadata: CodexAuthMetadata?) -> ProviderAccount {
+    /// The descriptor for one credential file.
+    ///
+    /// Identity is unchanged by configured roots: a file that names an `account_id` still
+    /// reconciles onto the canonical identity, so the same workspace reached through two roots is
+    /// one account rather than two. Without one, the slot — and therefore the identity — is the
+    /// file's own path, which is stable for as long as the root points where it points.
+    private static func account(
+        at url: URL,
+        label: String,
+        metadata: CodexAuthMetadata?
+    ) -> ProviderAccount {
         let path = url.standardizedFileURL.path(percentEncoded: false)
         let slot = CredentialSlotID(source: slotSource, opaqueID: path)
         let accountID =
@@ -139,9 +163,8 @@ public struct CodexProvider: Provider {
             key: AccountKey(providerID: id, accountID: accountID),
             slot: slot,
             locator: locator(at: url),
-            displayName: metadata?.email,
+            displayName: label,
             availability: metadata == nil ? .unavailable : .active
         )
     }
-
 }

@@ -9,7 +9,7 @@ import Testing
 @Suite("Codex CLI rendering")
 struct CodexRenderingTests {
     private static let now = Date(timeIntervalSince1970: 1_766_930_000)
-    private let authURL = CodexAuthFile.url(home: ProviderFixtures.home)
+    private let authURL = CodexAuthFile.url(root: ProviderFixtures.codexRoot)
 
     private func collection(
         usage fixture: String,
@@ -44,14 +44,14 @@ struct CodexRenderingTests {
 
         #expect(
             rendered == """
-                PROVIDER  ACCOUNT                    PLAN  WINDOW               USED  RESETS
-                codex     fake-user@example.invalid  pro   Session               22%  5h 1m
-                codex     fake-user@example.invalid  pro   Weekly                43%  5d 12h
-                codex     fake-user@example.invalid  pro   GPT-5.3-Codex-Spark   30%  5h 1m
-                codex     fake-user@example.invalid  pro   GPT-5.3-Codex-Spark  100%  5d 12h
+                PROVIDER  ACCOUNT  PLAN  WINDOW               USED  RESETS
+                codex     Codex    pro   Session               22%  5h 1m
+                codex     Codex    pro   Weekly                43%  5d 12h
+                codex     Codex    pro   GPT-5.3-Codex-Spark   30%  5h 1m
+                codex     Codex    pro   GPT-5.3-Codex-Spark  100%  5d 12h
 
-                PROVIDER  ACCOUNT                    CREDITS
-                codex     fake-user@example.invalid  14.5
+                PROVIDER  ACCOUNT  CREDITS
+                codex     Codex    14.5
                 """
         )
         #expect(!rendered.contains("auth.json"))
@@ -172,7 +172,7 @@ struct CodexRenderingTests {
 
         #expect(encoded.contains(#""schemaVersion":1"#))
         #expect(encoded.contains(#""generatedAt":1766930000"#))
-        #expect(encoded.contains(#""label":"fake-user@example.invalid""#))
+        #expect(encoded.contains(#""label":"Codex""#))
         #expect(encoded.contains(#""providerID":"codex""#))
         #expect(encoded.contains(#""id":"plan:primary:session""#))
         #expect(encoded.contains(#""remaining":"14.5""#))

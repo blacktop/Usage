@@ -10,30 +10,23 @@ struct CopilotCredentialSlot: Sendable, Hashable {
     let tokenField: String
     /// Normalised GitHub host the token belongs to.
     let host: String
-    /// GitHub login, for display only.
-    let login: String?
 }
 
-/// Reader for the credential files the Copilot editor plugin and CLI keep under
-/// `~/.config/github-copilot`.
+/// Reader for the credential files the Copilot editor plugin and CLI keep in their configuration
+/// directory.
 ///
 /// Read-only, and shape-tolerant on purpose: these files belong to tools that version
 /// independently of Usage, and their internal key names are not part of any published contract.
 enum CopilotCredentialFiles {
     static let defaultHost = "github.com"
-    static let directory = ".config/github-copilot"
-    /// Candidate files in precedence order: the current editor-plugin store, its predecessor, and
-    /// the standalone CLI's store.
+    /// Candidate documents in precedence order, each read directly below a configured root: the
+    /// current editor-plugin store, its predecessor, and the standalone CLI's store.
     static let fileNames = ["apps.json", "hosts.json", "oauth.json"]
     /// Member names that have been observed holding the token, tried in this order.
     static let tokenFields = ["oauth_token", "access_token", "token"]
 
-    static func directoryURL(home: URL) -> URL {
-        home.appending(path: directory, directoryHint: .isDirectory)
-    }
-
-    static func url(home: URL, fileName: String) -> URL {
-        directoryURL(home: home).appending(path: fileName, directoryHint: .notDirectory)
+    static func url(root: URL, fileName: String) -> URL {
+        root.appending(path: fileName, directoryHint: .notDirectory)
     }
 
     /// Parses one credential file into slots, dropping only the entries that are unusable.
@@ -52,8 +45,7 @@ enum CopilotCredentialFiles {
                 fileName: fileName,
                 mapKey: key,
                 tokenField: tokenField,
-                host: host(forKey: key, fileName: fileName),
-                login: entry.login
+                host: host(forKey: key, fileName: fileName)
             )
         }
     }
@@ -112,17 +104,16 @@ enum CopilotCredentialFiles {
         return label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
     }
 
-    /// An entry's non-secret members. The token is located, never retained.
+    /// Which member of an entry holds its token. Nothing else is read: the entry's GitHub login
+    /// is not, because a configured root's label is what names the account.
     private struct Entry: Decodable, Sendable {
         let tokenField: String?
-        let login: String?
 
         init(from decoder: any Decoder) throws {
             let root = try decoder.container(keyedBy: AnyCodingKey.self)
             tokenField = CopilotCredentialFiles.tokenFields.first {
                 root.trimmedString($0) != nil
             }
-            login = root.trimmedString("user", "login", "github_user")
         }
     }
 }

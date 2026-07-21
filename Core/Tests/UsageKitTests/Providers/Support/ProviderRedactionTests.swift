@@ -57,7 +57,7 @@ struct ProviderRedactionTests {
 
     @Test("nothing Codex reads or renders carries token material")
     func codexKeepsNoSecrets() async throws {
-        let authURL = CodexAuthFile.url(home: ProviderFixtures.home)
+        let authURL = CodexAuthFile.url(root: ProviderFixtures.codexRoot)
         let http = InMemoryHTTPTransport()
         http.stub(
             CodexProvider.usageURL,
@@ -82,7 +82,7 @@ struct ProviderRedactionTests {
 
     @Test("nothing Claude reads or renders carries token material")
     func claudeKeepsNoSecrets() async throws {
-        let credentialURL = ClaudeCredentialFile.url(home: ProviderFixtures.home)
+        let credentialURL = ClaudeCredentialFile.url(root: ProviderFixtures.claudeRoot)
         let locator = CredentialLocator(
             kind: .file,
             identifier: credentialURL.standardizedFileURL.path(percentEncoded: false),
@@ -118,7 +118,7 @@ struct ProviderRedactionTests {
     @Test("nothing Copilot reads or renders carries token material")
     func copilotKeepsNoSecrets() async throws {
         let appsURL = CopilotCredentialFiles.url(
-            home: ProviderFixtures.home,
+            root: ProviderFixtures.copilotRoot,
             fileName: "apps.json"
         )
         let locator = CredentialLocator(
@@ -143,7 +143,7 @@ struct ProviderRedactionTests {
 
         let account = try #require(
             try await CopilotProvider().discoverAccounts(using: context)
-                .first { $0.slot.opaqueID == "Iv1.b507a08c87ecfe98:github.com" }
+                .first { $0.locator.path.first == "Iv1.b507a08c87ecfe98:github.com" }
         )
         let report = try await CopilotProvider().fetchUsage(for: account, using: context)
         try assertNoSecrets(in: account, report: report)
@@ -164,7 +164,7 @@ struct ProviderRedactionTests {
     /// path does not, and each renders through a different branch.
     @Test("an expired Claude credential leaks nothing through the unavailable path")
     func expiredClaudeAccountKeepsNoSecrets() async throws {
-        let credentialURL = ClaudeCredentialFile.url(home: ProviderFixtures.home)
+        let credentialURL = ClaudeCredentialFile.url(root: ProviderFixtures.claudeRoot)
         let context = ProviderContext.sealed(
             fileSystem: SealedFileSystem(
                 files: [
@@ -183,7 +183,7 @@ struct ProviderRedactionTests {
 
     @Test("a Codex file holding only an API key leaks nothing through its descriptor")
     func codexAPIKeyOnlyAccountKeepsNoSecrets() async throws {
-        let authURL = CodexAuthFile.url(home: ProviderFixtures.home)
+        let authURL = CodexAuthFile.url(root: ProviderFixtures.codexRoot)
         let context = ProviderContext.sealed(
             fileSystem: SealedFileSystem(
                 files: [authURL: try ProviderFixtures.data("Codex", "codex-auth-apikey-only")]
@@ -201,12 +201,18 @@ struct ProviderRedactionTests {
         let context = ProviderContext.sealed(
             fileSystem: SealedFileSystem(
                 files: [
-                    CopilotCredentialFiles.url(home: ProviderFixtures.home, fileName: "apps.json"):
-                        try ProviderFixtures.data("Copilot", "copilot-apps"),
-                    CopilotCredentialFiles.url(home: ProviderFixtures.home, fileName: "hosts.json"):
-                        try ProviderFixtures.data("Copilot", "copilot-hosts"),
-                    CopilotCredentialFiles.url(home: ProviderFixtures.home, fileName: "oauth.json"):
-                        try ProviderFixtures.data("Copilot", "copilot-oauth"),
+                    CopilotCredentialFiles.url(
+                        root: ProviderFixtures.copilotRoot,
+                        fileName: "apps.json"
+                    ): try ProviderFixtures.data("Copilot", "copilot-apps"),
+                    CopilotCredentialFiles.url(
+                        root: ProviderFixtures.copilotRoot,
+                        fileName: "hosts.json"
+                    ): try ProviderFixtures.data("Copilot", "copilot-hosts"),
+                    CopilotCredentialFiles.url(
+                        root: ProviderFixtures.copilotRoot,
+                        fileName: "oauth.json"
+                    ): try ProviderFixtures.data("Copilot", "copilot-oauth"),
                 ]
             )
         )

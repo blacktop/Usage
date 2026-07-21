@@ -26,9 +26,11 @@ enum CodexAuthFile {
     /// Advisory only: the CLI can refresh a token without updating this field, so a stale-looking
     /// credential is still fetched. It never gates a request.
     static let stalenessThreshold: TimeInterval = 8 * 86_400
+    /// The one document Codex discovery reads, directly below a configured root.
+    static let documentName = "auth.json"
 
-    static func url(home: URL) -> URL {
-        home.appending(path: ".codex/auth.json", directoryHint: .notDirectory)
+    static func url(root: URL) -> URL {
+        root.appending(path: documentName, directoryHint: .notDirectory)
     }
 
     /// Parses the document, requiring an OAuth token pair.

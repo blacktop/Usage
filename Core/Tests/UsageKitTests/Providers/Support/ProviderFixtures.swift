@@ -7,6 +7,18 @@ import Testing
 enum ProviderFixtures {
     static let home = URL(filePath: "/Users/fixture", directoryHint: .isDirectory)
 
+    /// A configuration root below the fixture home.
+    ///
+    /// The three named roots below are the ones `ProfileRootCollection.seeded` produces for this
+    /// home, so a context that takes the default root store discovers exactly these directories.
+    static func root(_ path: String) -> URL {
+        home.appending(path: path, directoryHint: .isDirectory)
+    }
+
+    static let claudeRoot = root(".claude")
+    static let codexRoot = root(".codex")
+    static let copilotRoot = root(".config/github-copilot")
+
     static func data(_ provider: String, _ name: String) throws -> Data {
         let url = try #require(
             Bundle.module.url(

@@ -7,7 +7,11 @@ import UsageKit
 @Suite("App model")
 @MainActor
 struct AppModelTests {
-    private func model(_ provider: any Provider, clock: GatedClock) -> AppModel {
+    private func model(
+        _ provider: any Provider,
+        clock: GatedClock,
+        profileRoots: (any ProfileRootStore)? = nil
+    ) -> AppModel {
         AppModel(
             registry: ProviderRegistry(providers: [provider]),
             context: ProviderContext(
@@ -15,7 +19,8 @@ struct AppModelTests {
                 credentials: InMemoryCredentialSource(),
                 fileSystem: InMemoryFileSystem(),
                 clock: clock,
-                interaction: BackgroundInteractionPolicy()
+                interaction: BackgroundInteractionPolicy(),
+                profileRoots: profileRoots
             ),
             // The stagger between one provider's fetches is proven in the coordinator's own
             // suite; here it would only park these tests on the gated clock.
@@ -118,6 +123,43 @@ struct AppModelTests {
 
         #expect(model.store.discoveryFailures[ScriptedProvider.id] == nil)
         #expect(model.store.accounts.count == 1)
+    }
+
+    /// Settings edits roots through `model.profileRoots` and then asks for a rediscovery. That only
+    /// works if the model kept the store its own context reads: a second store over the same suite
+    /// would be a second boundary, and the edit and the refresh would race across it.
+    @Test("An edit through the model's store is what the next discovery reads")
+    func editingTheRetainedStoreIsVisibleToDiscovery() async throws {
+        let home = URL(filePath: "/Users/fixture", directoryHint: .isDirectory)
+        let roots = InMemoryProfileRootStore(homeDirectory: home)
+        let model = model(ScriptedProvider(), clock: GatedClock(), profileRoots: roots)
+
+        var edited = try await model.profileRoots.load()
+        try edited.add(
+            providerID: ProviderID("codex"),
+            label: "Work",
+            configurationDirectoryPath: "/Users/fixture/profiles/work"
+        )
+        try await model.profileRoots.save(edited)
+
+        let observed = try await roots.load()
+        #expect(observed.profiles.map(\.label).contains("Work"))
+        #expect(observed == edited)
+    }
+
+    @Test("The shipped app runs the real providers through the shared profile-root store")
+    func liveWiringUsesTheSharedStore() {
+        let model = AppModel.live()
+        #expect(model.profileRoots is UserDefaultsProfileRootStore)
+        #expect(model.store.accounts.isEmpty)
+        #expect(
+            ProviderRegistry.agents.providerIDs.map(\.rawValue).sorted()
+                == ["claude", "codex", "copilot"]
+        )
+        #expect(
+            ProviderRegistry.agents.provider(for: UsageKit.PreviewProvider.id) == nil,
+            "the synthetic preview accounts belong to the suites, not to a shipped menu bar"
+        )
     }
 
     @Test("An unexpected error type reaches the store redacted")

@@ -5,7 +5,7 @@ import Testing
 
 @Suite("Codex provider")
 struct CodexProviderTests {
-    private let authURL = CodexAuthFile.url(home: ProviderFixtures.home)
+    private let authURL = CodexAuthFile.url(root: ProviderFixtures.codexRoot)
 
     private func fileSystem(auth fixture: String?) throws -> SealedFileSystem {
         guard let fixture else { return SealedFileSystem() }
@@ -44,7 +44,7 @@ struct CodexProviderTests {
             account.key.accountID
                 == .canonical(provider: CodexProvider.id, canonicalID: "acct_FAKE0000000000000001")
         )
-        #expect(account.displayName == "fake-user@example.invalid")
+        #expect(account.displayName == "Codex", "the configured label names the account")
         #expect(account.availability == .active)
         #expect(account.locator.path == ["tokens", "access_token"])
         #expect(files.readsOutsideHome.isEmpty)
@@ -74,7 +74,10 @@ struct CodexProviderTests {
             try await CodexProvider().discoverAccounts(using: context).first
         )
         #expect(account.availability == .unavailable)
-        #expect(account.displayName == nil)
+        #expect(
+            account.displayName == "Codex",
+            "an unusable slot is still labelled, because the label comes from configuration"
+        )
     }
 
     // MARK: - The Keychain is not a Codex credential source

@@ -179,14 +179,16 @@ extension ProviderContext {
         credentials: SealedCredentialSource = SealedCredentialSource(),
         http: any HTTPTransport = RefusingHTTPTransport(),
         clock: ManualClock = ManualClock(),
-        interaction: any InteractionPolicy = BackgroundInteractionPolicy()
+        interaction: any InteractionPolicy = BackgroundInteractionPolicy(),
+        profileRoots: (any ProfileRootStore)? = nil
     ) -> ProviderContext {
         ProviderContext(
             http: http,
             credentials: credentials,
             fileSystem: fileSystem,
             clock: clock,
-            interaction: interaction
+            interaction: interaction,
+            profileRoots: profileRoots
         )
     }
 }

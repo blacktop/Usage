@@ -95,15 +95,22 @@ struct ReportRunnerTests {
         )
     }
 
-    /// Claude and Copilot are implemented but not cleared for the CLI host: the Keychain
-    /// feasibility gate is an explicit user approval this build does not have.
-    @Test("the CLI registry holds only the providers cleared for this host")
-    func commandLineRegistryIsGated() {
-        #expect(ProviderRegistry.commandLine.providerIDs.map(\.rawValue) == ["codex"])
-        #expect(ProviderRegistry.commandLine.provider(for: ProviderID("claude")) == nil)
-        #expect(ProviderRegistry.commandLine.provider(for: ProviderID("copilot")) == nil)
+    /// Every account now comes from a configured root and every credential from a file below it,
+    /// so there is no per-host capability left for the CLI's registry to differ over.
+    @Test("the CLI registry holds every implemented provider")
+    func commandLineRegistryHoldsEveryProvider() {
+        #expect(
+            ProviderRegistry.commandLine.providerIDs.map(\.rawValue).sorted()
+                == ["claude", "codex", "copilot"]
+        )
+        #expect(
+            ProviderRegistry.commandLine.providerIDs == ProviderRegistry.agents.providerIDs,
+            "the CLI runs exactly what is implemented"
+        )
     }
 
+    /// The injected file system holds none of the documents the seeded roots name, so every
+    /// registered provider discovers nothing and reports itself unavailable.
     @Test("a run that reaches no provider at all still prints and still exits 1")
     func runReportsATotalFailure() async throws {
         let selection = try ProviderSelection.parse([])
@@ -126,6 +133,6 @@ struct ReportRunnerTests {
                 return ""
             }
         }
-        #expect(rendered == "0/1")
+        #expect(rendered == "0/3")
     }
 }

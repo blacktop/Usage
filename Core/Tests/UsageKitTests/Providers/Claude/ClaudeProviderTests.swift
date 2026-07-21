@@ -5,32 +5,10 @@ import Testing
 
 @Suite("Claude provider")
 struct ClaudeProviderTests {
-    private static let credentialURL = ClaudeCredentialFile.url(home: ProviderFixtures.home)
+    private static let credentialURL = ClaudeCredentialFile.url(root: ProviderFixtures.claudeRoot)
     private static let accessToken = "sk-ant-oat01-FAKE-ACCESS-TOKEN-DO-NOT-USE-0000000000"
     /// A clock set before the happy fixture's expiry and after the expired fixture's.
     private static let now = Date(timeIntervalSince1970: 1_784_000_000)
-
-    private static func keychainDescriptor(
-        _ opaqueID: String,
-        displayName: String?
-    ) -> CredentialSlotDescriptor {
-        CredentialSlotDescriptor(
-            slot: CredentialSlotID(source: ClaudeProvider.keychainSlotSource, opaqueID: opaqueID),
-            locator: CredentialLocator(
-                kind: .keychain,
-                identifier: ClaudeCredentialFile.keychainService
-            ),
-            displayName: displayName
-        )
-    }
-
-    private static func keychainLocator() -> CredentialLocator {
-        CredentialLocator(
-            kind: .keychain,
-            identifier: ClaudeCredentialFile.keychainService,
-            path: ClaudeCredentialFile.secretPath
-        )
-    }
 
     private static func fileLocator() -> CredentialLocator {
         CredentialLocator(
@@ -40,68 +18,61 @@ struct ClaudeProviderTests {
         )
     }
 
-    // MARK: - Credential discovery
-
-    @Test("enumerates every Keychain slot, newest first, without reading any item's data")
-    func enumeratesKeychainSlots() async throws {
-        let credentials = SealedCredentialSource(
-            slots: [
-                ClaudeProvider.keychainNamespace: [
-                    Self.keychainDescriptor("aa11bb22cc33", displayName: "primary@example.invalid"),
-                    Self.keychainDescriptor("dd44ee55ff66", displayName: "second@example.invalid"),
-                ]
-            ]
+    private func fileSystem(credential fixture: String?) throws -> SealedFileSystem {
+        guard let fixture else { return SealedFileSystem() }
+        return SealedFileSystem(
+            files: [Self.credentialURL: try ProviderFixtures.data("Claude", fixture)]
         )
-        let context = ProviderContext.sealed(credentials: credentials)
-
-        let accounts = try await ClaudeProvider().discoverAccounts(using: context)
-
-        #expect(accounts.count == 2)
-        #expect(accounts[0].availability == .active)
-        #expect(accounts[1].availability == .inactive)
-        #expect(accounts[0].displayName == "primary@example.invalid")
-        #expect(accounts.allSatisfy { $0.key.accountID.derivation == .credentialSlot })
-        #expect(Set(accounts.map(\.key)).count == 2)
-        #expect(accounts.allSatisfy { $0.locator.path == ["claudeAiOauth", "accessToken"] })
-        #expect(credentials.enumeratedNamespaces == [ClaudeProvider.keychainNamespace])
-        #expect(credentials.resolvedLocators.isEmpty)
     }
 
-    @Test("falls back to the credentials file only when the Keychain has no slot")
-    func fallsBackToFile() async throws {
+    private func context(
+        credential fixture: String?,
+        http: any HTTPTransport = RefusingHTTPTransport(),
+        credentials: SealedCredentialSource = SealedCredentialSource()
+    ) throws -> ProviderContext {
+        ProviderContext.sealed(
+            fileSystem: try fileSystem(credential: fixture),
+            credentials: credentials,
+            http: http,
+            clock: ManualClock(now: Self.now)
+        )
+    }
+
+    // MARK: - Credential discovery
+
+    @Test("discovers the credential document below the configured root")
+    func discoversFileCredential() async throws {
+        let files = try fileSystem(credential: "claude-credential-happy")
+        let credentials = SealedCredentialSource()
         let context = ProviderContext.sealed(
-            fileSystem: SealedFileSystem(
-                files: [
-                    Self.credentialURL: try ProviderFixtures.data(
-                        "Claude",
-                        "claude-credential-happy"
-                    )
-                ]
-            ),
+            fileSystem: files,
+            credentials: credentials,
             clock: ManualClock(now: Self.now)
         )
 
-        let account = try #require(
-            try await ClaudeProvider().discoverAccounts(using: context).first
-        )
+        let accounts = try await ClaudeProvider().discoverAccounts(using: context)
+
+        let account = try #require(accounts.first)
+        #expect(accounts.count == 1)
         #expect(account.locator.kind == .file)
+        #expect(account.locator.identifier == Self.fileLocator().identifier)
+        #expect(account.locator.path == ["claudeAiOauth", "accessToken"])
         #expect(account.availability == .active)
-        #expect(account.displayName == "Claude Max 20x")
+        #expect(account.displayName == "Claude", "the configured label names the account")
+        #expect(account.key.accountID.derivation == .credentialSlot)
+        #expect(files.readsOutsideHome.isEmpty)
+        #expect(credentials.resolvedLocators.isEmpty)
+    }
+
+    @Test("reports no account when the root holds no credential document")
+    func discoversNothingWithoutFile() async throws {
+        let context = try context(credential: nil)
+        #expect(try await ClaudeProvider().discoverAccounts(using: context).isEmpty)
     }
 
     @Test("an expired file credential is discovered but marked unusable")
     func expiredFileCredential() async throws {
-        let context = ProviderContext.sealed(
-            fileSystem: SealedFileSystem(
-                files: [
-                    Self.credentialURL: try ProviderFixtures.data(
-                        "Claude",
-                        "claude-credential-expired"
-                    )
-                ]
-            ),
-            clock: ManualClock(now: Self.now)
-        )
+        let context = try context(credential: "claude-credential-expired")
         let account = try #require(
             try await ClaudeProvider().discoverAccounts(using: context).first
         )
@@ -111,8 +82,8 @@ struct ClaudeProviderTests {
     @Test("an MCP-only credential document is a missing sign-in, not a malformed file")
     func mcpOnlyCredential() throws {
         let data = try ProviderFixtures.data("Claude", "claude-credential-mcp-only")
-        #expect(throws: UsageError.credentialUnavailable(kind: .keychain)) {
-            _ = try ClaudeCredentialFile.parse(data, kind: .keychain)
+        #expect(throws: UsageError.credentialUnavailable(kind: .file)) {
+            _ = try ClaudeCredentialFile.parse(data, kind: .file)
         }
     }
 
@@ -129,6 +100,52 @@ struct ClaudeProviderTests {
     func composesPlanLabel(subscription: String?, tier: String?, expected: String?) {
         #expect(
             ClaudePlanLabel.make(subscriptionType: subscription, rateLimitTier: tier) == expected)
+    }
+
+    // MARK: - The Keychain is not a Claude credential source
+
+    /// Claude Code also keeps this credential in a `Claude Code-credentials` Keychain item, and
+    /// discovery used to enumerate it. It cannot any more: an item belongs to the host rather than
+    /// to a configured root, so every root would collapse onto one slot. Reinstating the
+    /// enumeration — as a first choice or as a fallback — turns these red.
+    @Test(
+        "the Keychain is never enumerated, whatever the root holds",
+        arguments: [nil, "claude-credential-happy", "claude-credential-expired"] as [String?]
+    )
+    func neverEnumeratesTheKeychain(fixture: String?) async throws {
+        let credentials = SealedCredentialSource(
+            slots: [
+                CredentialLocator(
+                    kind: .keychain,
+                    identifier: ClaudeCredentialFile.keychainService
+                ): [
+                    CredentialSlotDescriptor(
+                        slot: CredentialSlotID(source: "claude.keychain", opaqueID: "aa11bb22"),
+                        locator: CredentialLocator(
+                            kind: .keychain,
+                            identifier: ClaudeCredentialFile.keychainService
+                        ),
+                        displayName: "primary@example.invalid"
+                    )
+                ]
+            ]
+        )
+        let context = try context(credential: fixture, credentials: credentials)
+
+        let accounts = try await ClaudeProvider().discoverAccounts(using: context)
+
+        #expect(credentials.enumeratedNamespaces.isEmpty)
+        #expect(accounts.allSatisfy { $0.locator.kind == .file })
+        #expect(!accounts.contains { $0.displayName == "primary@example.invalid" })
+    }
+
+    @Test("an empty root is no account rather than a Keychain fallback")
+    func emptyRootDoesNotFallBack() async throws {
+        let credentials = SealedCredentialSource()
+        let context = try context(credential: nil, credentials: credentials)
+
+        #expect(try await ClaudeProvider().discoverAccounts(using: context).isEmpty)
+        #expect(credentials.enumeratedNamespaces.isEmpty)
     }
 
     // MARK: - Request construction
@@ -154,11 +171,17 @@ struct ClaudeProviderTests {
             ClaudeProvider.usageURL,
             with: try ProviderFixtures.response("Claude", "claude-usage-happy")
         )
-        let (account, context) = try await keychainAccount(http: http)
+        let (account, context) = try await signedInAccount(http: http)
         _ = try await ClaudeProvider().fetchUsage(for: account, using: context)
 
         let sent = try #require(http.recordedRequests.first)
         #expect(sent.headerValue("Authorization") == "Bearer \(Self.accessToken)")
+    }
+
+    @Test("the plan label still comes from the credential, not from the configured label")
+    func reportsPlanFromCredential() async throws {
+        let report = try await fetch(usage: "claude-usage-happy")
+        #expect(report.plan == "Claude Max 20x")
     }
 
     // MARK: - Response parsing
@@ -287,18 +310,10 @@ struct ClaudeProviderTests {
     @Test("an expired file credential is not sent to the network at all")
     func skipsNetworkForExpiredCredential() async throws {
         let http = InMemoryHTTPTransport()
-        let context = ProviderContext.sealed(
-            fileSystem: SealedFileSystem(
-                files: [
-                    Self.credentialURL: try ProviderFixtures.data(
-                        "Claude",
-                        "claude-credential-expired"
-                    )
-                ]
-            ),
-            credentials: SealedCredentialSource(secrets: [Self.fileLocator(): Self.accessToken]),
+        let context = try context(
+            credential: "claude-credential-expired",
             http: http,
-            clock: ManualClock(now: Self.now)
+            credentials: SealedCredentialSource(secrets: [Self.fileLocator(): Self.accessToken])
         )
         let account = try #require(
             try await ClaudeProvider().discoverAccounts(using: context).first
@@ -324,11 +339,7 @@ struct ClaudeProviderTests {
             ClaudeProvider.usageURL,
             with: try ProviderFixtures.response("Claude", "claude-usage-happy")
         )
-        let files = SealedFileSystem(
-            files: [
-                Self.credentialURL: try ProviderFixtures.data("Claude", "claude-credential-happy")
-            ]
-        )
+        let files = try fileSystem(credential: "claude-credential-happy")
         let credentials = SealedCredentialSource(
             secrets: [Self.fileLocator(): Self.accessToken],
             allowsInteraction: false
@@ -348,22 +359,20 @@ struct ClaudeProviderTests {
         #expect(files.mutationAttempts.isEmpty)
         #expect(files.isUnmodified)
         #expect(files.readsOutsideHome.isEmpty)
+        #expect(credentials.mutationAttempts.isEmpty)
+        #expect(credentials.isUnmodified)
         #expect(credentials.refusedInteractiveRequests.isEmpty)
+        #expect(credentials.enumeratedNamespaces.isEmpty)
     }
 
-    @Test("a Keychain slot that would need UI fails closed during a background refresh")
+    @Test("a credential that would need UI fails closed during a background refresh")
     func failsClosedWithoutInteraction() async throws {
         let credentials = SealedCredentialSource(
-            secrets: [Self.keychainLocator(): Self.accessToken],
-            slots: [
-                ClaudeProvider.keychainNamespace: [
-                    Self.keychainDescriptor("aa11bb22cc33", displayName: nil)
-                ]
-            ],
-            interactiveOnly: [Self.keychainLocator()],
+            secrets: [Self.fileLocator(): Self.accessToken],
+            interactiveOnly: [Self.fileLocator()],
             allowsInteraction: false
         )
-        let context = ProviderContext.sealed(credentials: credentials)
+        let context = try context(credential: "claude-credential-happy", credentials: credentials)
         let account = try #require(
             try await ClaudeProvider().discoverAccounts(using: context).first
         )
@@ -371,43 +380,26 @@ struct ClaudeProviderTests {
         await #expect(throws: UsageError.interactionForbidden()) {
             _ = try await ClaudeProvider().fetchUsage(for: account, using: context)
         }
-        #expect(credentials.refusedInteractiveRequests == [Self.keychainLocator()])
+        #expect(credentials.refusedInteractiveRequests == [Self.fileLocator()])
     }
 
     @Test("discovery makes no network request")
     func discoveryIsLocal() async throws {
         let http = InMemoryHTTPTransport()
-        let context = ProviderContext.sealed(
-            credentials: SealedCredentialSource(
-                slots: [
-                    ClaudeProvider.keychainNamespace: [
-                        Self.keychainDescriptor("aa11bb22cc33", displayName: nil)
-                    ]
-                ]
-            ),
-            http: http
-        )
+        let context = try context(credential: "claude-credential-happy", http: http)
         _ = try await ClaudeProvider().discoverAccounts(using: context)
         #expect(http.recordedRequests.isEmpty)
     }
 
     // MARK: - Helpers
 
-    private func keychainAccount(
+    private func signedInAccount(
         http: InMemoryHTTPTransport
     ) async throws -> (ProviderAccount, ProviderContext) {
-        let credentials = SealedCredentialSource(
-            secrets: [Self.keychainLocator(): Self.accessToken],
-            slots: [
-                ClaudeProvider.keychainNamespace: [
-                    Self.keychainDescriptor("aa11bb22cc33", displayName: "primary@example.invalid")
-                ]
-            ]
-        )
-        let context = ProviderContext.sealed(
-            credentials: credentials,
+        let context = try context(
+            credential: "claude-credential-happy",
             http: http,
-            clock: ManualClock(now: Self.now)
+            credentials: SealedCredentialSource(secrets: [Self.fileLocator(): Self.accessToken])
         )
         let account = try #require(
             try await ClaudeProvider().discoverAccounts(using: context).first
@@ -418,7 +410,7 @@ struct ClaudeProviderTests {
     private func fetch(usage fixture: String) async throws -> UsageReport {
         let http = InMemoryHTTPTransport()
         http.stub(ClaudeProvider.usageURL, with: try ProviderFixtures.response("Claude", fixture))
-        let (account, context) = try await keychainAccount(http: http)
+        let (account, context) = try await signedInAccount(http: http)
         return try await ClaudeProvider().fetchUsage(for: account, using: context)
     }
 
@@ -437,7 +429,7 @@ struct ClaudeProviderTests {
                 headers: headers
             )
         )
-        let (account, context) = try await keychainAccount(http: http)
+        let (account, context) = try await signedInAccount(http: http)
         var captured: UsageError?
         do {
             _ = try await ClaudeProvider().fetchUsage(for: account, using: context)
