@@ -4,7 +4,44 @@ import UsageKit
 
 @testable import Usage
 
-/// A profile-root store a test drives directly, including into failure.
+/// A latch that parks one store operation until a test lets it go.
+///
+/// An unarmed gate is not there at all, so the suites that do not care about ordering read and
+/// write straight through. An armed one turns "a load overlapped a save" from something a test
+/// would have to provoke with sleeps into a sequence it states outright.
+private actor Gate {
+    private var isArmed = false
+    private var parked: CheckedContinuation<Void, Never>?
+    private var arrival: CheckedContinuation<Void, Never>?
+
+    /// Parks the next operation to reach this gate, and only that one.
+    func arm() {
+        isArmed = true
+    }
+
+    func park() async {
+        guard isArmed else { return }
+        isArmed = false
+        await withCheckedContinuation { continuation in
+            parked = continuation
+            arrival?.resume()
+            arrival = nil
+        }
+    }
+
+    /// Returns once an operation is parked here, whether it arrived before this call or after it.
+    func waitForArrival() async {
+        guard parked == nil else { return }
+        await withCheckedContinuation { arrival = $0 }
+    }
+
+    func release() {
+        parked?.resume()
+        parked = nil
+    }
+}
+
+/// A profile-root store a test drives directly, including into failure and into a chosen order.
 ///
 /// Not `UserDefaultsProfileRootStore`: these suites must neither read nor disturb the preferences
 /// domain the running user's own roots live in.
@@ -13,6 +50,11 @@ private actor StubProfileRootStore: ProfileRootStore {
         case load(ProfileRootStoreError)
         case save(ProfileRootStoreError)
     }
+
+    /// A load parks *after* reading, so a released one answers with the collection it saw on the
+    /// way in — which is what a reload overtaken by a save is holding.
+    let loadGate = Gate()
+    let saveGate = Gate()
 
     private var collection: ProfileRootCollection
     private var failure: Failure?
@@ -31,10 +73,13 @@ private actor StubProfileRootStore: ProfileRootStore {
 
     func load() async throws(ProfileRootStoreError) -> ProfileRootCollection {
         if case .load(let error) = failure { throw error }
-        return collection
+        let read = collection
+        await loadGate.park()
+        return read
     }
 
     func save(_ profiles: ProfileRootCollection) async throws(ProfileRootStoreError) {
+        await saveGate.park()
         if case .save(let error) = failure { throw error }
         saveCount += 1
         collection = profiles
@@ -298,6 +343,45 @@ struct ProfileSettingsModelTests {
                 == ["/Users/fixture/profiles/a", "/Users/fixture/profiles/b"]
         )
         #expect(await harness.store.saveCount == 2)
+    }
+
+    @Test("A reload overtaken by a save keeps the edit instead of the collection it read first")
+    func aReloadOvertakenByASaveKeepsTheEdit() async throws {
+        let harness = Harness(collection: try collection(["/Users/fixture/profiles/work"]))
+        await harness.settings.load()
+        let id = try #require(harness.rows("claude").first).id
+
+        // The order is stated rather than raced: the toggle's save parks in storage, the reload
+        // reads the collection from before that toggle and parks behind it, the save is let go and
+        // its edit settles, and only then does the reload come back holding the older collection.
+        await harness.store.saveGate.arm()
+        async let edit: Void = harness.settings.setEnabled(false, for: id)
+        await harness.store.saveGate.waitForArrival()
+
+        await harness.store.loadGate.arm()
+        async let reload: Void = harness.settings.load()
+        await harness.store.loadGate.waitForArrival()
+
+        await harness.store.saveGate.release()
+        await edit
+        await harness.store.loadGate.release()
+        await reload
+        await harness.settings.quiesce()
+
+        #expect(await harness.store.stored.profiles.map(\.isEnabled) == [false])
+        #expect(
+            harness.rows("claude").map(\.profile.isEnabled) == [false],
+            "the rows stay at the edit rather than rolling back to the reload's older read"
+        )
+        #expect(harness.settings.errorMessage == nil)
+
+        await harness.settings.rename(id, to: "Work")
+        await harness.settings.quiesce()
+
+        #expect(
+            await harness.store.stored.profiles.map(\.isEnabled) == [false],
+            "and the edit is not written back out by the mutation that follows the reload"
+        )
     }
 
     @Test("A row reports the provider's sign-in file by existence alone")

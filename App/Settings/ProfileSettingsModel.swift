@@ -50,6 +50,8 @@ final class ProfileSettingsModel {
 
     /// The collection storage last accepted. Never replaced by a candidate that failed to save.
     @ObservationIgnored private var persisted: ProfileRootCollection?
+    /// How many mutations have settled. A read that began at an older count is an older collection.
+    @ObservationIgnored private var settledMutations = 0
     @ObservationIgnored private var mutations: Task<Void, Never>?
     @ObservationIgnored private var rediscoveries: Task<Void, Never>?
 
@@ -81,11 +83,25 @@ final class ProfileSettingsModel {
     // MARK: - Reading
 
     /// Reads storage and rebuilds the rows. A failure leaves the rows that are already on screen.
+    ///
+    /// The read is stamped with the mutations that had settled when it began. One that settles
+    /// while the read is in flight makes that read the older of the two collections, and adopting
+    /// it would put the rows back to before the edit and hand the next mutation a collection to
+    /// persist the rollback from. A read that comes back stamped stale is dropped instead.
     func load() async {
+        let generation = settledMutations
+        let outcome: Result<ProfileRootCollection, ProfileRootStoreError>
         do {
-            persisted = try await store.load()
-            errorMessage = nil
+            outcome = .success(try await store.load())
         } catch {
+            outcome = .failure(error)
+        }
+        guard settledMutations == generation else { return }
+        switch outcome {
+        case .success(let collection):
+            persisted = collection
+            errorMessage = nil
+        case .failure(let error):
             errorMessage = Self.message(for: error)
         }
         rebuildSections()
@@ -160,6 +176,9 @@ final class ProfileSettingsModel {
     }
 
     private func commit(_ mutation: Mutation) async {
+        // Every path below settles state a load already in flight cannot have read — the applied
+        // collection, the refusal, or the save failure — so the stamp moves whichever one is taken.
+        defer { settledMutations += 1 }
         guard let current = persisted else {
             errorMessage = "Provider folders have not finished loading yet."
             return

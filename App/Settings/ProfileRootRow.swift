@@ -77,6 +77,8 @@ struct ProfileRootRow: View {
         }
     }
 
+    /// Both buttons name the folder they act on. Icon-only rendering leaves a screen reader with
+    /// nothing but the label, and "Remove" fifty times over is fifty rows a user cannot tell apart.
     private var actions: some View {
         HStack(spacing: 4) {
             Button {
@@ -84,6 +86,7 @@ struct ProfileRootRow: View {
             } label: {
                 Label("Reveal in Finder", systemImage: "folder")
             }
+            .accessibilityLabel("Reveal “\(profile.label)” in Finder")
             .help("Reveal in Finder")
 
             Button(role: .destructive) {
@@ -91,6 +94,7 @@ struct ProfileRootRow: View {
             } label: {
                 Label("Remove", systemImage: "trash")
             }
+            .accessibilityLabel("Remove “\(profile.label)” from Usage")
             .help("Remove this folder from Usage")
         }
         .labelStyle(.iconOnly)
