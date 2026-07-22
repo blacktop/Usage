@@ -88,7 +88,7 @@ struct AppModelTests {
         #expect(state.report == cached)
         #expect(state.lastError == .transportFailure())
         #expect(state.refreshPhase == .scheduled, "a failed account is queued for its retry")
-        #expect(AccountCard.RefreshIndicator.forState(state) == .failed)
+        #expect(AccountRefreshIndicator.forState(state) == .failed)
     }
 
     @Test("A later success clears the error without disturbing the row")

@@ -39,6 +39,9 @@ struct PopoverAccountSectionTests {
         #expect(section.visibleRowCount == 50)
         #expect(section.accounts.isEmpty)
         #expect(section.unrepresentedProfiles.map(\.id) == profiles.map(\.id))
+        let presentation = ProviderUsagePresentation(section: section)
+        #expect(presentation.accounts.count == 50)
+        #expect(presentation.discoveredAccountCount == 0)
     }
 
     @Test("A discovered account replaces only the configured profile it represents")
@@ -91,6 +94,124 @@ struct PopoverAccountSectionTests {
         #expect(section.visibleRowCount == 1)
     }
 
+    @Test("Accounts share one provider presentation with meters grouped by window identity")
+    func groupsMetersAcrossAccounts() throws {
+        let weeklyID = WindowID(scope: .plan, slot: .primary, period: .weekly)
+        let sparkID = WindowID(
+            scope: .additional(feature: "gpt-5.3-codex-spark"),
+            slot: .primary,
+            period: .weekly
+        )
+        let reset = Date(timeIntervalSince1970: 2_000_000_000)
+        let personal = try reportedState(
+            label: "Codex",
+            canonicalID: "personal",
+            windows: [
+                window(id: weeklyID, label: "Weekly", usedFraction: 0.04, resetsAt: reset),
+                window(id: sparkID, label: "GPT-5.3-Codex-Spark", usedFraction: 0),
+            ]
+        )
+        let team = try reportedState(
+            label: "Codex TEAM",
+            canonicalID: "team",
+            windows: [
+                window(id: weeklyID, label: "Weekly", usedFraction: 0.06, resetsAt: reset),
+                window(id: sparkID, label: "GPT-5.3-Codex-Spark", usedFraction: 0),
+            ]
+        )
+
+        let presentation = ProviderUsagePresentation(
+            section: PopoverAccountSection(
+                id: CodexProvider.id,
+                displayName: "Codex",
+                accounts: [personal, team],
+                unrepresentedProfiles: []
+            )
+        )
+
+        #expect(presentation.accounts.map(\.label) == ["Codex", "Codex TEAM"])
+        #expect(presentation.accounts.map(\.colorIndex) == [0, 1])
+        #expect(presentation.windowGroups.map(\.id) == [weeklyID, sparkID])
+        #expect(presentation.windowGroups.map(\.label) == ["Weekly", "GPT-5.3-Codex-Spark"])
+        #expect(presentation.windowGroups.map(\.meters.count) == [2, 2])
+        #expect(
+            presentation.windowGroups[0].meters.map(\.window.remainingFraction) == [0.96, 0.94]
+        )
+        #expect(
+            presentation.windowGroups[0].meters.map(\.account.colorIndex) == [0, 1]
+        )
+    }
+
+    @Test("A missing metric and an unsigned profile stay explicit without inventing empty bars")
+    func keepsSparseMetricsAndConfiguredProfilesExplicit() throws {
+        let weeklyID = WindowID(scope: .plan, slot: .primary, period: .weekly)
+        let namedID = WindowID(
+            scope: .additional(feature: "fable"),
+            slot: .primary,
+            period: .weekly
+        )
+        let personal = try reportedState(
+            label: "Personal",
+            canonicalID: "personal",
+            windows: [
+                window(id: weeklyID, label: "Weekly", usedFraction: 0.2),
+                window(id: namedID, label: "Fable only", usedFraction: 0.4),
+            ],
+            credits: try CreditBalance(remaining: 8, granted: 10)
+        )
+        let team = try reportedState(
+            label: "Team",
+            canonicalID: "team",
+            windows: [window(id: weeklyID, label: "Weekly", usedFraction: 0.3)]
+        )
+        let unsigned = ConfiguredProfileStatus(
+            profile: try profile(label: "Offline", suffix: "codex-offline"),
+            hasCredentialDocument: false
+        )
+
+        let presentation = ProviderUsagePresentation(
+            section: PopoverAccountSection(
+                id: CodexProvider.id,
+                displayName: "Codex",
+                accounts: [personal, team],
+                unrepresentedProfiles: [unsigned]
+            )
+        )
+
+        #expect(presentation.accounts.map(\.label) == ["Personal", "Team", "Offline"])
+        #expect(presentation.accounts.map(\.colorIndex) == [0, 1, 2])
+        #expect(presentation.windowGroups.map(\.meters.count) == [2, 1])
+        #expect(presentation.windowGroups[1].meters.map(\.account.label) == ["Personal"])
+        #expect(presentation.credits.map(\.account.label) == ["Personal"])
+        #expect(presentation.accounts.last?.configuredProfile == unsigned)
+        #expect(presentation.discoveredAccountCount == 2)
+    }
+
+    @Test("A partial cached report keeps its warning when a later refresh fails")
+    func partialReportWarningSurvivesRefreshFailure() throws {
+        let weeklyID = WindowID(scope: .plan, slot: .primary, period: .weekly)
+        let state = try reportedState(
+            label: "Personal",
+            canonicalID: "personal",
+            windows: [window(id: weeklyID, label: "Weekly", usedFraction: 0.2)],
+            isPartial: true,
+            lastError: .transportFailure()
+        )
+        let presentation = ProviderUsagePresentation(
+            section: PopoverAccountSection(
+                id: CodexProvider.id,
+                displayName: "Codex",
+                accounts: [state],
+                unrepresentedProfiles: []
+            )
+        )
+        let account = try #require(presentation.accounts.first)
+        let issue = ProviderAccountIssuePresentation(account: account)
+
+        #expect(issue.error == .transportFailure())
+        #expect(issue.notice == "Some limits could not be read")
+    }
+
     private func profile(label: String, suffix: String) throws -> ProfileRoot {
         try ProfileRoot(
             providerID: CodexProvider.id,
@@ -115,6 +236,50 @@ struct PopoverAccountSectionTests {
                 displayName: label,
                 availability: .active
             )
+        )
+    }
+
+    private func reportedState(
+        label: String,
+        canonicalID: String,
+        windows: [UsageWindow],
+        credits: CreditBalance? = nil,
+        isPartial: Bool = false,
+        lastError: UsageError? = nil
+    ) throws -> AccountState {
+        let key = AccountKey(
+            providerID: CodexProvider.id,
+            accountID: .canonical(provider: CodexProvider.id, canonicalID: canonicalID)
+        )
+        let account = AccountProjection(
+            key: key,
+            slots: [CredentialSlotID(source: "codex.auth-json", opaqueID: label)],
+            displayName: label,
+            availability: .active
+        )
+        let report = try UsageReport(
+            accountKey: key,
+            plan: "pro",
+            windows: windows,
+            credits: credits,
+            capturedAt: Date(timeIntervalSince1970: 1_900_000_000),
+            isPartial: isPartial
+        )
+        return AccountState(account: account, report: report, lastError: lastError)
+    }
+
+    private func window(
+        id: WindowID,
+        label: String,
+        usedFraction: Double,
+        resetsAt: Date? = nil
+    ) throws -> UsageWindow {
+        try UsageWindow(
+            id: id,
+            kind: .weekly,
+            label: label,
+            usedFraction: usedFraction,
+            resetsAt: resetsAt
         )
     }
 }

@@ -81,7 +81,7 @@ struct UsageStoreTests {
         #expect(state.lastError == .transportFailure())
         #expect(state.refreshPhase == .idle)
         #expect(!store.isRefreshing)
-        #expect(AccountCard.RefreshIndicator.forState(state) == .failed)
+        #expect(AccountRefreshIndicator.forState(state) == .failed)
     }
 
     @Test("cache → loading → success replaces the report and clears the error")
@@ -104,7 +104,7 @@ struct UsageStoreTests {
         #expect(store.accounts.count == 1)
     }
 
-    @Test("A scheduled account reports that it is waiting, not that it is loading")
+    @Test("A scheduled account does not add status noise to the account legend")
     func scheduledPhaseIsDistinctFromLoading() throws {
         let store = discoveredStore()
         store.apply(.succeeded(report: try report(fraction: 0.4, at: start), at: start))
@@ -113,7 +113,7 @@ struct UsageStoreTests {
         let state = try #require(store.accounts.first)
         #expect(state.refreshPhase == .scheduled)
         #expect(!store.isRefreshing)
-        #expect(AccountCard.RefreshIndicator.forState(state) == .waiting)
+        #expect(AccountRefreshIndicator.forState(state) == nil)
         #expect(state.report != nil)
     }
 
@@ -162,20 +162,33 @@ struct UsageStoreTests {
         #expect(store.discoveryFailures[ScriptedProvider.id] != nil)
     }
 
-    @Test("A card says when its numbers are being shown despite a failed refresh")
+    @Test("A provider card says when its numbers are being shown despite a failed refresh")
     func freshnessTextDistinguishesStaleData() throws {
         let store = discoveredStore()
         store.apply(.succeeded(report: try report(fraction: 0.4, at: start), at: start))
         let loaded = try #require(store.accounts.first)
-        let fresh = try #require(AccountCard.freshnessText(for: loaded))
+        let fresh = try #require(freshnessText(for: loaded))
 
         store.apply(
             .failed(error: .transportFailure(), key: ScriptedProvider.accountKey, at: start)
         )
         let failing = try #require(store.accounts.first)
-        let stale = try #require(AccountCard.freshnessText(for: failing))
+        let stale = try #require(freshnessText(for: failing))
 
         #expect(fresh != stale)
-        #expect(stale.contains("showing usage from"))
+        #expect(stale.contains("showing cached data from"))
+    }
+
+    private func freshnessText(for state: AccountState) -> String? {
+        ProviderFreshnessText.text(
+            for: ProviderUsagePresentation(
+                section: PopoverAccountSection(
+                    id: ScriptedProvider.id,
+                    displayName: "Scripted",
+                    accounts: [state],
+                    unrepresentedProfiles: []
+                )
+            )
+        )
     }
 }

@@ -68,13 +68,9 @@ struct PopoverAccountList: View {
                 )
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 10) {
                         ForEach(sections) { section in
-                            VStack(alignment: .leading, spacing: 8) {
-                                ProviderSectionHeader(section: section)
-                                ProviderAccountRows(section: section, onRetry: onRetry)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            ProviderUsageCard(section: section, onRetry: onRetry)
                         }
                     }
                     .padding(.bottom, 2)
@@ -93,78 +89,5 @@ struct PopoverAccountList: View {
             }
         }
         .accessibilityIdentifier("provider-account-list")
-    }
-}
-
-private struct ProviderSectionHeader: View {
-    let section: PopoverAccountSection
-
-    var body: some View {
-        Text(section.displayName)
-            .font(.subheadline.weight(.semibold))
-            .accessibilityAddTraits(.isHeader)
-    }
-}
-
-private struct ProviderAccountRows: View {
-    let section: PopoverAccountSection
-    let onRetry: (AccountKey, Bool) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(section.accounts) { state in
-                AccountCard(
-                    state: state,
-                    onRetry: { requiresCredentialApproval in
-                        onRetry(state.account.key, requiresCredentialApproval)
-                    }
-                )
-            }
-
-            ForEach(section.unrepresentedProfiles) { profile in
-                UnrepresentedProfileRow(status: profile)
-            }
-        }
-    }
-}
-
-private struct UnrepresentedProfileRow: View {
-    let status: ConfiguredProfileStatus
-
-    private var profile: ProfileRoot { status.profile }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.circle")
-                .font(.callout)
-                .foregroundStyle(status.hasCredentialDocument ? .orange : .secondary)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(profile.label)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1)
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.primary.opacity(0.035), in: .rect(cornerRadius: 9))
-        .overlay {
-            RoundedRectangle(cornerRadius: 9)
-                .stroke(.primary.opacity(0.06), lineWidth: 1)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("configured-profile-\(profile.id.rawValue)")
-    }
-
-    private var message: String {
-        status.hasCredentialDocument
-            ? "No usable account found"
-            : "No readable credential found"
     }
 }
