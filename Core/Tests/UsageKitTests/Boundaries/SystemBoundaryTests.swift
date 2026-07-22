@@ -181,8 +181,8 @@ struct SystemBoundaryTests {
         #expect(query[kSecUseAuthenticationUI as String] as? String == "u_AuthUIF")
     }
 
-    /// The recovery path the `.interactionRequired` message points at. Without this the Settings
-    /// retry would issue a byte-identical no-UI query and fail identically, forever.
+    /// The recovery path the `.interactionRequired` message points at. Without this the account's
+    /// approval action would issue a byte-identical no-UI query and fail identically, forever.
     @Test("a user-initiated policy is the one construction that drops the no-UI markers")
     func userInitiatedPolicyPermitsCredentialUI() {
         let reference = KeychainItemReference(data: Data([0x01, 0x02, 0x03]))
@@ -195,6 +195,25 @@ struct SystemBoundaryTests {
             #expect(query[kSecUseAuthenticationUI as String] == nil)
             #expect(query[kSecUseAuthenticationContext as String] == nil)
         }
+    }
+
+    @Test("a canceled Keychain authorization is approval-required, not credential-missing")
+    func canceledAuthorizationRequiresApproval() {
+        #expect(
+            KeychainCredentialSource.failure(for: errSecUserCanceled)
+                == UsageError.interactionForbidden()
+        )
+        #expect(
+            KeychainCredentialSource.failure(for: errSecInteractionNotAllowed)
+                == UsageError.interactionForbidden()
+        )
+        #expect(
+            KeychainCredentialSource.failure(for: errSecItemNotFound)
+                == UsageError.credentialUnavailable(kind: .keychain)
+        )
+        #expect(UsageError.interactionForbidden().requiresCredentialApproval)
+        #expect(!UsageError.credentialUnavailable(kind: .keychain).requiresCredentialApproval)
+        #expect(!UsageError.credentialUnavailable(kind: .file).requiresCredentialApproval)
     }
 
     @Test("the system source's default and its background policy build the same query")

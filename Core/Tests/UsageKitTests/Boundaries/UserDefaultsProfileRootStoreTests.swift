@@ -22,6 +22,7 @@ struct UserDefaultsProfileRootStoreTests {
             profiles.profiles.map(\.configurationDirectoryPath) == [
                 "/Users/injected/.claude",
                 "/Users/injected/.codex",
+                "/Users/injected/.copilot",
                 "/Users/injected/.config/github-copilot",
             ])
         #expect(fixture.defaults.object(forKey: UserDefaultsProfileRootStore.storageKey) == nil)

@@ -37,16 +37,7 @@ struct MapperValidationTests {
 
     @Test("An over-quota fraction is preserved, not clamped")
     func overQuotaFractionIsPreserved() throws {
-        let window = try window(1.4)
-        #expect(window.usedFraction == 1.4)
-        #expect(window.renderFraction == 1.0)
-    }
-
-    @Test("Clamping is a render-time concern only")
-    func renderFractionClampsBothEnds() throws {
-        #expect(try window(0).renderFraction == 0)
-        #expect(try window(0.5).renderFraction == 0.5)
-        #expect(try window(12).renderFraction == 1)
+        #expect(try window(1.4).usedFraction == 1.4)
     }
 
     @Test("Remaining capacity inverts usage and floors exhausted or over-quota windows at zero")

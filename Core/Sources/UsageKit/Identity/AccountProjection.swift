@@ -47,12 +47,15 @@ public struct AccountProjection: Sendable, Hashable, Identifiable {
         )
     }
 
-    private static func uniqued<Element: Hashable>(_ values: [Element]) -> [Element] {
+    /// `values` with later duplicates dropped, so discovery order survives every fold.
+    fileprivate static func uniqued<Element: Hashable>(_ values: [Element]) -> [Element] {
         var seen: Set<Element> = []
         return values.filter { seen.insert($0).inserted }
     }
 
-    private static func mostAvailable(
+    /// The best state either side can prove. Folding a set of rows starts from `.unavailable`, so
+    /// no rows at all is the same answer as no usable row.
+    fileprivate static func mostAvailable(
         _ first: ProviderAccount.Availability,
         _ second: ProviderAccount.Availability
     ) -> ProviderAccount.Availability {
@@ -81,29 +84,12 @@ extension IdentityReconciler {
             guard let members = grouped[key] else { return nil }
             return AccountProjection(
                 key: key,
-                slots: Self.orderedSlots(of: members),
-                profileRootIDs: Self.orderedProfileRoots(of: members),
+                slots: AccountProjection.uniqued(members.map(\.slot)),
+                profileRootIDs: AccountProjection.uniqued(members.compactMap(\.profileRootID)),
                 displayName: members.compactMap(\.displayName).first,
-                availability: Self.mostAvailable(of: members)
+                availability: members.map(\.availability)
+                    .reduce(.unavailable, AccountProjection.mostAvailable)
             )
         }
-    }
-
-    private static func orderedSlots(of accounts: [ProviderAccount]) -> [CredentialSlotID] {
-        var seen: Set<CredentialSlotID> = []
-        return accounts.map(\.slot).filter { seen.insert($0).inserted }
-    }
-
-    private static func orderedProfileRoots(of accounts: [ProviderAccount]) -> [ProfileRootID] {
-        var seen: Set<ProfileRootID> = []
-        return accounts.compactMap(\.profileRootID).filter { seen.insert($0).inserted }
-    }
-
-    private static func mostAvailable(
-        of accounts: [ProviderAccount]
-    ) -> ProviderAccount.Availability {
-        if accounts.contains(where: { $0.availability == .active }) { return .active }
-        if accounts.contains(where: { $0.availability == .inactive }) { return .inactive }
-        return .unavailable
     }
 }

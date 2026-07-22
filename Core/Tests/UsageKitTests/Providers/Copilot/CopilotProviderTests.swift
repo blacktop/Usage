@@ -24,6 +24,47 @@ struct CopilotProviderTests {
         )
     }
 
+    private static func keychainDescriptor(
+        service: String,
+        account: String = "github.com",
+        identifier: String
+    ) -> (CredentialLocator, CredentialSlotDescriptor) {
+        let namespace = CredentialLocator(kind: .keychain, identifier: service)
+        return (
+            namespace,
+            CredentialSlotDescriptor(
+                slot: CredentialSlotID(source: "keychain:\(service)", opaqueID: account),
+                locator: CredentialLocator(kind: .keychain, identifier: identifier),
+                displayName: account
+            )
+        )
+    }
+
+    private static func githubCLIDescriptor(
+        account: String = "fixture"
+    )
+        -> (CredentialLocator, CredentialSlotDescriptor)
+    {
+        let namespace = CredentialLocator(
+            kind: .keychain,
+            identifier: CopilotProvider.githubCLIKeychainService
+        )
+        return (
+            namespace,
+            CredentialSlotDescriptor(
+                slot: CredentialSlotID(
+                    source: "keychain:\(CopilotProvider.githubCLIKeychainService)",
+                    opaqueID: account
+                ),
+                locator: CredentialLocator(
+                    kind: .keychain,
+                    identifier: "persistent-gh-\(account)"
+                ),
+                displayName: account
+            )
+        )
+    }
+
     private func fileSystem(_ fixtures: [String: String]) throws -> SealedFileSystem {
         var files: [URL: Data] = [:]
         for (fileName, fixture) in fixtures {
@@ -43,7 +84,7 @@ struct CopilotProviderTests {
 
         #expect(accounts.count == 2)
         #expect(
-            accounts.allSatisfy { $0.displayName == "Copilot" },
+            accounts.allSatisfy { $0.displayName == "Copilot CLI" },
             "the configured label names every account the root yields"
         )
         #expect(
@@ -84,6 +125,84 @@ struct CopilotProviderTests {
     func discoversNothingWithoutFiles() async throws {
         let context = ProviderContext.sealed()
         #expect(try await CopilotProvider().discoverAccounts(using: context).isEmpty)
+    }
+
+    @Test("Copilot CLI Keychain authentication supersedes a legacy file for github.com")
+    func cliKeychainSupersedesLegacyFile() async throws {
+        let cli = Self.keychainDescriptor(
+            service: CopilotProvider.cliKeychainService,
+            identifier: "persistent-copilot-cli"
+        )
+        let githubCLI = Self.githubCLIDescriptor(account: "fallback-user")
+        let credentials = SealedCredentialSource(
+            slots: [cli.0: [cli.1], githubCLI.0: [githubCLI.1]]
+        )
+        let context = ProviderContext.sealed(
+            fileSystem: try fileSystem(["apps.json": "copilot-apps"]),
+            credentials: credentials
+        )
+
+        let accounts = try await CopilotProvider().discoverAccounts(using: context)
+
+        #expect(accounts.map(CopilotProvider.host(of:)) == ["github.com", "octofixture.ghe.com"])
+        #expect(accounts.first?.locator.identifier == "persistent-copilot-cli")
+        #expect(accounts.first?.locator.path.isEmpty == true)
+        #expect(accounts.first?.displayName == "github.com")
+        #expect(credentials.enumeratedNamespaces == [cli.0])
+        #expect(credentials.resolvedLocators.isEmpty, "discovery must not read token payloads")
+    }
+
+    @Test("every GitHub CLI Keychain account becomes an account-bound gh locator")
+    func githubCLIFallback() async throws {
+        let cli = CredentialLocator(
+            kind: .keychain,
+            identifier: CopilotProvider.cliKeychainService
+        )
+        let first = Self.githubCLIDescriptor(account: "first-user")
+        let second = Self.githubCLIDescriptor(account: "second-user")
+        let credentials = SealedCredentialSource(slots: [first.0: [first.1, second.1]])
+
+        let accounts = try await CopilotProvider().discoverAccounts(
+            using: ProviderContext.sealed(credentials: credentials)
+        )
+
+        #expect(accounts.map(\.displayName) == ["first-user", "second-user"])
+        #expect(accounts.map(\.locator.kind) == [.githubCLI, .githubCLI])
+        #expect(accounts.map(\.locator.path) == [["first-user"], ["second-user"]])
+        #expect(accounts.allSatisfy { CopilotProvider.host(of: $0) == "github.com" })
+        #expect(credentials.enumeratedNamespaces == [cli, first.0])
+    }
+
+    @Test("Copilot CLI Keychain rows preserve enterprise hosts and reject non-host accounts")
+    func keychainHostsArePreservedOrRejected() async throws {
+        let namespace = CredentialLocator(
+            kind: .keychain,
+            identifier: CopilotProvider.cliKeychainService
+        )
+        let enterprise = Self.keychainDescriptor(
+            service: CopilotProvider.cliKeychainService,
+            account: "team.ghe.example",
+            identifier: "persistent-enterprise"
+        )
+        let hostile = Self.keychainDescriptor(
+            service: CopilotProvider.cliKeychainService,
+            account: "team.ghe.example@evil.example",
+            identifier: "persistent-hostile"
+        )
+        let credentials = SealedCredentialSource(
+            slots: [namespace: [enterprise.1, hostile.1]]
+        )
+
+        let account = try #require(
+            try await CopilotProvider().discoverAccounts(
+                using: ProviderContext.sealed(credentials: credentials)
+            ).first
+        )
+
+        #expect(CopilotProvider.host(of: account) == "team.ghe.example")
+        #expect(account.displayName == "team.ghe.example")
+        #expect(account.locator.identifier == "persistent-enterprise")
+        #expect(credentials.enumeratedNamespaces == [namespace])
     }
 
     @Test(
@@ -157,15 +276,40 @@ struct CopilotProviderTests {
         )
     }
 
-    @Test("authorization uses GitHub's token scheme, not Bearer")
-    func usesTokenScheme() async throws {
+    @Test("authorization uses the Bearer scheme expected by the Copilot CLI endpoint")
+    func usesBearerScheme() async throws {
         let http = InMemoryHTTPTransport()
         let (account, context) = try await githubAccount(http: http, usage: "copilot-user-happy")
         _ = try await CopilotProvider().fetchUsage(for: account, using: context)
 
         let sent = try #require(http.recordedRequests.first)
-        #expect(sent.headerValue("Authorization") == "token \(Self.token)")
-        #expect(sent.headerValue("Authorization")?.hasPrefix("Bearer") == false)
+        #expect(sent.headerValue("Authorization") == "Bearer \(Self.token)")
+    }
+
+    @Test("the discovered GitHub CLI account's token is used as the whole bearer credential")
+    func fetchesWithGitHubCLICredential() async throws {
+        let item = Self.githubCLIDescriptor(account: "bound-user")
+        let locator = try #require(GitHubCLICredentialSource.locator(login: "bound-user"))
+        let credentials = SealedCredentialSource(
+            secrets: [locator: Self.token],
+            slots: [item.0: [item.1]]
+        )
+        let http = InMemoryHTTPTransport()
+        http.stub(
+            try #require(CopilotProvider.usageURL(host: "github.com")),
+            with: try ProviderFixtures.response("Copilot", "copilot-user-happy")
+        )
+        let context = ProviderContext.sealed(credentials: credentials, http: http)
+        let account = try #require(
+            try await CopilotProvider().discoverAccounts(using: context).first
+        )
+
+        _ = try await CopilotProvider().fetchUsage(for: account, using: context)
+
+        #expect(account.locator == locator)
+        #expect(account.displayName == "bound-user")
+        #expect(credentials.resolvedLocators == [locator])
+        #expect(http.recordedRequests.first?.headerValue("Authorization") == "Bearer \(Self.token)")
     }
 
     // MARK: - Response parsing
@@ -371,7 +515,17 @@ struct CopilotProviderTests {
         #expect(files.isUnmodified)
         #expect(files.readsOutsideHome.isEmpty)
         #expect(credentials.refusedInteractiveRequests.isEmpty)
-        #expect(credentials.enumeratedNamespaces.isEmpty)
+        #expect(
+            credentials.enumeratedNamespaces.map(\.identifier)
+                == [
+                    CopilotProvider.cliKeychainService,
+                    CopilotProvider.githubCLIKeychainService,
+                ]
+        )
+        #expect(
+            credentials.resolvedLocators == [Self.locator("apps.json", key: Self.githubKey)],
+            "global credential discovery enumerates accounts but never resolves a token"
+        )
     }
 
     @Test("discovery makes no network request")

@@ -1,10 +1,11 @@
 /// The production `CredentialSource`, routing each locator to the store that owns it.
 ///
-/// `CredentialLocator.Kind` is the whole routing table, so a provider never chooses between a file
-/// and the Keychain: it hands over a locator and the source knows where that lives.
+/// `CredentialLocator.Kind` is the whole routing table. A provider hands over a locator and this
+/// source resolves it through the file system, Keychain, or an explicitly named GitHub CLI account.
 public struct SystemCredentialSource: CredentialSource {
     private let files: FileCredentialSource
     private let keychain: KeychainCredentialSource
+    private let githubCLI: GitHubCLICredentialSource
 
     public init(
         fileSystem: any ProviderFileSystem,
@@ -12,6 +13,7 @@ public struct SystemCredentialSource: CredentialSource {
     ) {
         files = FileCredentialSource(fileSystem: fileSystem)
         keychain = KeychainCredentialSource(interaction: interaction)
+        githubCLI = GitHubCLICredentialSource()
     }
 
     public func withCredential<T: CredentialScopedResult>(
@@ -21,6 +23,7 @@ public struct SystemCredentialSource: CredentialSource {
         switch locator.kind {
         case .file: try await files.withCredential(at: locator, perform: operation)
         case .keychain: try await keychain.withCredential(at: locator, perform: operation)
+        case .githubCLI: try await githubCLI.withCredential(at: locator, perform: operation)
         }
     }
 
@@ -28,6 +31,7 @@ public struct SystemCredentialSource: CredentialSource {
         switch namespace.kind {
         case .file: []
         case .keychain: try await keychain.slots(in: namespace)
+        case .githubCLI: []
         }
     }
 }

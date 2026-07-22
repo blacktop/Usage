@@ -48,9 +48,6 @@ public struct UsageWindow: Sendable, Hashable, Codable, Identifiable {
         self.detail = detail
     }
 
-    /// `usedFraction` limited to `0...1` for progress rendering. The stored value stays untouched.
-    public var renderFraction: Double { min(1, max(0, usedFraction)) }
-
     /// Capacity still available, clamped at zero once a window is exhausted or over quota.
     ///
     /// Providers, persistence, and history continue to speak in consumption. User-facing meters

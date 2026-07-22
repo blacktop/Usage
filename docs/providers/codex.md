@@ -7,7 +7,7 @@
 | Credential | `ROOT/auth.json`, or the root-scoped direct Keychain row |
 | Owner | the `codex` CLI |
 | Access | read-only, through the injected `ProviderFileSystem` and `CredentialSource` |
-| Keychain | service `Codex Auth`, account `cli|<first 16 hex of SHA-256(canonical ROOT)>` |
+| Keychain | service `Codex Auth`, account `cli\|<first 16 hex of SHA-256(canonical ROOT)>` |
 
 The file locator is
 `CredentialLocator(kind: .file, identifier: "ROOT/auth.json", path: ["tokens", "access_token"])`.

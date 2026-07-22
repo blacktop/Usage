@@ -163,8 +163,9 @@ struct ProfileSettingsModelTests {
         await harness.settings.load()
 
         #expect(harness.settings.sections.map(\.id.rawValue) == ["codex", "claude", "copilot"])
-        #expect(harness.settings.sections.allSatisfy { $0.rows.count == 1 })
+        #expect(harness.settings.sections.map(\.rows.count) == [1, 1, 2])
         #expect(harness.rows("claude").map(\.profile.label) == ["Claude"])
+        #expect(harness.rows("copilot").map(\.profile.label) == ["Copilot CLI", "Copilot Editor"])
         #expect(harness.settings.errorMessage == nil)
     }
 
@@ -391,6 +392,7 @@ struct ProfileSettingsModelTests {
             files: [
                 URL(filePath: "/Users/fixture/profiles/work/.credentials.json"): Data(),
                 URL(filePath: "/Users/fixture/profiles/copilot/hosts.json"): Data(),
+                URL(filePath: "/Users/fixture/profiles/copilot-config/config.json"): Data(),
             ]
         )
         var stored = try collection(
@@ -401,29 +403,29 @@ struct ProfileSettingsModelTests {
             label: "",
             configurationDirectoryPath: "/Users/fixture/profiles/copilot"
         )
+        try stored.add(
+            providerID: ProviderID("copilot"),
+            label: "",
+            configurationDirectoryPath: "/Users/fixture/profiles/copilot-config"
+        )
         let harness = Harness(collection: stored, files: files)
 
         await harness.settings.load()
 
         #expect(harness.rows("claude").map(\.hasCredentialDocument) == [true, false])
-        #expect(harness.rows("copilot").map(\.hasCredentialDocument) == [true])
+        #expect(harness.rows("copilot").map(\.hasCredentialDocument) == [true, false])
         #expect(harness.files.recordedReads.isEmpty, "presence is existence, never a read")
     }
 
     @Test("Every registered provider names the documents it reads below a root")
     func everyRegisteredProviderNamesItsDocuments() {
+        #expect(ProviderCredentialDocuments.names(for: claude) == [".credentials.json"])
+        #expect(ProviderCredentialDocuments.names(for: ProviderID("codex")) == ["auth.json"])
         #expect(
-            ProfileSettingsModel.credentialDocumentNames(for: claude) == [".credentials.json"]
-        )
-        #expect(
-            ProfileSettingsModel.credentialDocumentNames(for: ProviderID("codex")) == [
-                "auth.json"
-            ])
-        #expect(
-            ProfileSettingsModel.credentialDocumentNames(for: ProviderID("copilot"))
+            ProviderCredentialDocuments.names(for: ProviderID("copilot"))
                 == ["apps.json", "hosts.json", "oauth.json"]
         )
-        #expect(ProfileSettingsModel.credentialDocumentNames(for: ProviderID("gemini")).isEmpty)
+        #expect(ProviderCredentialDocuments.names(for: ProviderID("gemini")).isEmpty)
     }
 
     @Test("Reveal hands the root's own directory to the injected action and opens nothing")

@@ -104,6 +104,40 @@ extension RefreshCoordinator {
         ensureScheduler()
     }
 
+    /// Retries one account with a user-initiated credential source.
+    ///
+    /// The account is reserved while the system dialog is open so a scheduled wave cannot issue a
+    /// competing read. The provider fetch runs inside the authorized credential operation: choosing
+    /// one-time “Allow” must not spend that read on a probe and then issue a second background read
+    /// that immediately needs approval again.
+    public func approveCredentialAccess(
+        for key: AccountKey,
+        using interactiveCredentials: any CredentialSource
+    ) async {
+        guard var state = states[key], !state.isInFlight,
+            let provider = registry.provider(for: key.providerID)
+        else { return }
+        guard !isSuspended else {
+            await sink.receive(.scheduled(key: key))
+            return
+        }
+        state.isInFlight = true
+        states[key] = state
+        await sink.receive(.began(key: key, at: clock.now))
+
+        let interactiveContext = ProviderContext(
+            http: context.http,
+            credentials: interactiveCredentials,
+            fileSystem: context.fileSystem,
+            clock: context.clock,
+            interaction: UserInitiatedInteractionPolicy(),
+            profileRoots: context.profileRoots
+        )
+        let result = await Self.fetch(state.account, from: provider, using: interactiveContext)
+        await complete(result)
+        ensureScheduler()
+    }
+
     /// Stops the scheduler without discarding schedule state.
     ///
     /// In-flight fetches are left to finish or fail on their own: cancelling them would throw away

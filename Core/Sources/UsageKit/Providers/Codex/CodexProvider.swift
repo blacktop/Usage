@@ -92,14 +92,13 @@ public struct CodexProvider: Provider {
         for account: ProviderAccount,
         using context: ProviderContext
     ) async throws -> UsageReport {
-        let fallbackMetadata = fileMetadata(for: account, using: context)
         let result = try await context.credentials.withCredential(at: account.locator) {
             credential in
             let metadata =
                 try credential.metadata {
                     (data: Data) throws(UsageError) -> CodexAuthMetadata in
                     try CodexAuthFile.parse(data, kind: account.locator.kind)
-                } ?? fallbackMetadata
+                } ?? fileMetadata(for: account, using: context)
             let request = usageRequest(chatGPTAccountID: metadata?.accountID)
             let response = try await context.http.send(
                 credential.authorizing(request, with: .bearer)
@@ -144,19 +143,15 @@ public struct CodexProvider: Provider {
         guard context.fileSystem.fileExists(at: url),
             let data = try? context.fileSystem.read(contentsOf: url)
         else { return nil }
-        return account(
-            at: url,
-            profileRootID: root.id,
-            label: root.label,
-            metadata: try? CodexAuthFile.parse(data)
-        )
+        return account(in: root, at: url, metadata: try? CodexAuthFile.parse(data))
     }
 
     /// Re-reads the credential file for the request's non-secret metadata.
     ///
-    /// Read fresh on every fetch rather than cached at discovery, because the Codex CLI rewrites
-    /// the file whenever it refreshes, and a cached `account_id` from an earlier login would
-    /// address the wrong workspace.
+    /// Only reached when the credential source handed back no document — the production file source
+    /// always does, so this costs nothing on the shipped path. Read fresh rather than cached at
+    /// discovery, because the Codex CLI rewrites the file whenever it refreshes, and a cached
+    /// `account_id` from an earlier login would address the wrong workspace.
     private static func fileMetadata(
         for account: ProviderAccount,
         using context: ProviderContext
@@ -197,12 +192,11 @@ public struct CodexProvider: Provider {
     /// one account rather than two. Without one, the slot — and therefore the identity — is the
     /// file's own path, which is stable for as long as the root points where it points.
     private static func account(
+        in root: ProfileRootLocation,
         at url: URL,
-        profileRootID: ProfileRootID,
-        label: String,
         metadata: CodexAuthMetadata?
     ) -> ProviderAccount {
-        let slot = Self.slot(for: url.deletingLastPathComponent())
+        let slot = Self.slot(for: root.directory)
         let accountID =
             metadata?.accountID.map { AccountID.canonical(provider: id, canonicalID: $0) }
             ?? AccountID.credentialSlot(provider: id, slot: slot)
@@ -210,8 +204,8 @@ public struct CodexProvider: Provider {
             key: AccountKey(providerID: id, accountID: accountID),
             slot: slot,
             locator: locator(at: url),
-            profileRootID: profileRootID,
-            displayName: label,
+            profileRootID: root.id,
+            displayName: root.label,
             availability: metadata == nil ? .unavailable : .active
         )
     }

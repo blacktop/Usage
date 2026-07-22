@@ -263,10 +263,18 @@ final class ProfileSettingsModel {
         displayName: String,
         in profiles: [ProfileRoot]
     ) -> ProviderSection {
+        // A disabled root is checked the same way as one that is not, because the answer describes
+        // the folder rather than the schedule.
         var rows: [RootRow] = []
         for profile in profiles where profile.providerID == id {
             rows.append(
-                RootRow(profile: profile, hasCredentialDocument: hasCredentialDocument(profile))
+                RootRow(
+                    profile: profile,
+                    hasCredentialDocument: ProviderCredentialDocuments.exists(
+                        below: profile,
+                        using: fileSystem
+                    )
+                )
             )
         }
         return ProviderSection(
@@ -275,23 +283,6 @@ final class ProfileSettingsModel {
             credentialDocumentNames: ProviderCredentialDocuments.names(for: id),
             rows: rows
         )
-    }
-
-    /// Whether any document this provider reads exists directly below the root.
-    ///
-    /// Existence and nothing else: no document is opened, no token is counted, and a root that is
-    /// disabled is checked the same way as one that is not, because the answer describes the folder
-    /// rather than the schedule.
-    private func hasCredentialDocument(_ profile: ProfileRoot) -> Bool {
-        return ProviderCredentialDocuments.exists(below: profile, using: fileSystem)
-    }
-
-    /// The documents each provider is known to read directly below a configured root.
-    ///
-    /// Kept as a model-level entry point for tests and delegated to the shared non-secret mapping
-    /// the popover also uses. A registered provider absent from that mapping reports nothing.
-    static func credentialDocumentNames(for providerID: ProviderID) -> [String] {
-        ProviderCredentialDocuments.names(for: providerID)
     }
 
     static func directoryURL(for profile: ProfileRoot) -> URL {

@@ -151,6 +151,14 @@ public struct UsageError: Error, Sendable, Hashable, Codable, CustomStringConver
     }
 
     public var description: String { "\(category.rawValue): \(message)" }
+
+    /// Whether an explicit, user-initiated Keychain read is the recovery action this error names.
+    ///
+    /// A genuinely absent or malformed credential stays `.credentialUnavailable`: prompting cannot
+    /// repair its payload and must not be presented as if it could.
+    public var requiresCredentialApproval: Bool {
+        reason == .interactionForbidden
+    }
 }
 
 extension UsageError {

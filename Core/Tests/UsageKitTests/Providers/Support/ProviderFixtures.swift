@@ -17,7 +17,7 @@ enum ProviderFixtures {
 
     static let claudeRoot = root(".claude")
     static let codexRoot = root(".codex")
-    static let copilotRoot = root(".config/github-copilot")
+    static let copilotRoot = root(".copilot")
 
     static func data(_ provider: String, _ name: String) throws -> Data {
         let url = try #require(

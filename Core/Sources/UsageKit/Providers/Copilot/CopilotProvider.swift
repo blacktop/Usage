@@ -1,11 +1,10 @@
 import Foundation
 
-/// GitHub Copilot, read through the credential files the Copilot editor plugin and CLI keep in
-/// their configuration directory, one directory per configured root.
+/// GitHub Copilot, read through the current CLI credential sources and the files older
+/// Copilot clients keep in their configuration directory.
 ///
 /// Read-only: Usage runs no device flow, writes no Keychain item, and never rewrites those files.
-/// The `gho_` tokens they hold have no refresh token, so there would be nothing to refresh even if
-/// we wanted to. Reauthentication belongs to whichever tool wrote the file.
+/// Reauthentication belongs to whichever tool wrote the credential.
 public struct CopilotProvider: Provider {
     public static let id = ProviderID("copilot")
 
@@ -17,6 +16,9 @@ public struct CopilotProvider: Provider {
     static let userAgent = "GitHubCopilotChat/0.26.7"
     static let apiVersion = "2025-04-01"
     static let slotSourcePrefix = "copilot."
+    static let globalSlotSourcePrefix = "copilot.global."
+    static let cliKeychainService = "copilot-cli"
+    static let githubCLIKeychainService = "gh:github.com"
 
     public let displayName = "GitHub Copilot"
     public let dashboardURL = StaticURL.make("https://github.com/settings/copilot")
@@ -24,10 +26,30 @@ public struct CopilotProvider: Provider {
     public init() {}
 
     /// Every usable credential entry below every enabled configured root, in root order.
+    ///
+    /// The current Copilot CLI checks its own Keychain item and then GitHub CLI authentication
+    /// before legacy editor files. Those host-wide sources are attached once, to the first enabled
+    /// Copilot root, so adding roots never duplicates the same global credential.
     public func discoverAccounts(using context: ProviderContext) async throws -> [ProviderAccount] {
+        let roots = try await context.enabledProfileRoots(for: Self.id)
         var accounts: [ProviderAccount] = []
-        for root in try await context.enabledProfileRoots(for: Self.id) {
-            accounts.append(contentsOf: Self.accounts(in: root, using: context))
+        var globalHosts: Set<String> = []
+        if let firstRoot = roots.first {
+            let globalAccounts = await Self.globalAccounts(
+                in: firstRoot,
+                using: context
+            )
+            accounts.append(contentsOf: globalAccounts)
+            globalHosts.formUnion(globalAccounts.map(Self.host(of:)))
+        }
+        for root in roots {
+            accounts.append(
+                contentsOf: Self.fileAccounts(
+                    in: root,
+                    excluding: root.id == roots.first?.id ? globalHosts : [],
+                    using: context
+                )
+            )
         }
         return accounts
     }
@@ -38,12 +60,13 @@ public struct CopilotProvider: Provider {
     /// `oauth.json`, matching the order the tools themselves migrated through. Precedence is scoped
     /// to the root and not to the whole run, because two roots both holding `github.com` are two
     /// configured accounts, not the same entry seen twice.
-    private static func accounts(
+    private static func fileAccounts(
         in root: ProfileRootLocation,
+        excluding excludedHosts: Set<String>,
         using context: ProviderContext
     ) -> [ProviderAccount] {
         var accounts: [ProviderAccount] = []
-        var claimedHosts: Set<String> = []
+        var claimedHosts = excludedHosts
         for fileName in CopilotCredentialFiles.fileNames {
             let url = CopilotCredentialFiles.url(root: root.directory, fileName: fileName)
             guard context.fileSystem.fileExists(at: url),
@@ -60,6 +83,43 @@ public struct CopilotProvider: Provider {
         return accounts
     }
 
+    /// Current Copilot CLI authentication, in precedence order: its own host-keyed Keychain rows,
+    /// then GitHub CLI's account-keyed rows. Enumeration is attributes-only. GitHub CLI payloads
+    /// are resolved by `gh auth token --user`, so Usage neither guesses which row is active nor
+    /// asks for direct access to a Keychain item owned by `gh`.
+    private static func globalAccounts(
+        in root: ProfileRootLocation,
+        using context: ProviderContext
+    ) async -> [ProviderAccount] {
+        let cliNamespace = CredentialLocator(kind: .keychain, identifier: cliKeychainService)
+        if let descriptors = try? await context.credentials.slots(in: cliNamespace) {
+            let accounts = descriptors.compactMap { descriptor -> ProviderAccount? in
+                guard let host = copilotCLIHost(descriptor) else { return nil }
+                return globalAccount(descriptor: descriptor, host: host, root: root)
+            }
+            if !accounts.isEmpty { return accounts }
+        }
+
+        let githubNamespace = CredentialLocator(
+            kind: .keychain,
+            identifier: githubCLIKeychainService
+        )
+        guard let descriptors = try? await context.credentials.slots(in: githubNamespace) else {
+            return []
+        }
+        return descriptors.compactMap { descriptor in
+            guard let login = descriptor.displayName,
+                let locator = GitHubCLICredentialSource.locator(login: login)
+            else { return nil }
+            return globalAccount(
+                descriptor: descriptor,
+                locator: locator,
+                host: CopilotCredentialFiles.defaultHost,
+                root: root
+            )
+        }
+    }
+
     public func fetchUsage(
         for account: ProviderAccount,
         using context: ProviderContext
@@ -69,7 +129,7 @@ public struct CopilotProvider: Provider {
         }
         let response = try await context.credentials.withCredential(at: account.locator) {
             credential in
-            try await context.http.send(credential.authorizing(request, with: .token))
+            try await context.http.send(credential.authorizing(request, with: .bearer))
         }
         guard response.isSuccess else {
             throw Self.error(from: response, now: context.clock.now)
@@ -100,8 +160,8 @@ public struct CopilotProvider: Provider {
 
     /// The usage request, minus authorization.
     ///
-    /// Authorization uses GitHub's `token` scheme, not `Bearer`, and carries the raw OAuth token
-    /// rather than an exchanged short-lived Copilot token.
+    /// Authorization uses the `Bearer` scheme used by the current Copilot CLI and carries its
+    /// resolved OAuth credential.
     static func usageRequest(host: String) -> HTTPRequest? {
         guard let url = usageURL(host: host) else { return nil }
         return HTTPRequest(
@@ -139,6 +199,9 @@ public struct CopilotProvider: Provider {
     /// used for this: it qualifies that key with the file's path so that the same host under two
     /// configured roots stays two accounts.
     static func host(of account: ProviderAccount) -> String {
+        if account.slot.source.hasPrefix(globalSlotSourcePrefix) {
+            return String(account.slot.source.dropFirst(globalSlotSourcePrefix.count))
+        }
         let fileName = String(account.slot.source.dropFirst(slotSourcePrefix.count))
         return CopilotCredentialFiles.host(
             forKey: account.locator.path.first ?? "",
@@ -172,5 +235,40 @@ public struct CopilotProvider: Provider {
             displayName: label,
             availability: .active
         )
+    }
+
+    private static func globalAccount(
+        descriptor: CredentialSlotDescriptor,
+        locator: CredentialLocator? = nil,
+        host: String,
+        root: ProfileRootLocation
+    ) -> ProviderAccount {
+        let slot = CredentialSlotID(
+            source: globalSlotSourcePrefix + host,
+            opaqueID: descriptor.slot.opaqueID
+        )
+        return ProviderAccount(
+            key: AccountKey(
+                providerID: id,
+                accountID: .credentialSlot(provider: id, slot: slot)
+            ),
+            slot: slot,
+            locator: locator ?? descriptor.locator,
+            profileRootID: root.id,
+            displayName: descriptor.displayName ?? root.label,
+            availability: .active
+        )
+    }
+
+    /// The Copilot CLI stores one row per host with the host in the non-secret account attribute.
+    /// A row that does not carry a bare authority is unusable: defaulting it to github.com could
+    /// send an enterprise credential to the public API.
+    private static func copilotCLIHost(_ descriptor: CredentialSlotDescriptor) -> String? {
+        guard let raw = descriptor.displayName?.trimmedNonEmpty else { return nil }
+        let host = raw.lowercased()
+        guard CopilotCredentialFiles.isBareAuthority(host), usageURL(host: host) != nil else {
+            return nil
+        }
+        return host
     }
 }

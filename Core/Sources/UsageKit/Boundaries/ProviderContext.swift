@@ -39,8 +39,8 @@ public struct ProviderContext: Sendable {
     /// The context the app's scheduled refreshes and the whole CLI run under.
     ///
     /// `BackgroundInteractionPolicy` by default, including for the CLI: a command run from a
-    /// terminal is still not a place to raise a Keychain dialog. Only an explicit Settings action
-    /// passes a policy that allows one.
+    /// terminal is still not a place to raise a Keychain dialog. Only an explicit account approval
+    /// action passes a policy that allows one.
     public static func system(
         interaction: any InteractionPolicy = BackgroundInteractionPolicy()
     ) -> ProviderContext {

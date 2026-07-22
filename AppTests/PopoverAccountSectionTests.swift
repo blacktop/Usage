@@ -7,13 +7,15 @@ import UsageKit
 @Suite("Popover account sections")
 @MainActor
 struct PopoverAccountSectionTests {
-    @Test("The overview reserves a full viewport and one column for every shipped provider")
-    func overviewFitsEveryProviderAtOnce() {
-        #expect(PopoverOverviewLayout.accountAreaHeight >= 600)
-        #expect(PopoverOverviewLayout.width(forProviderCount: 0) == 620)
-        #expect(PopoverOverviewLayout.width(forProviderCount: 1) == 620)
-        #expect(PopoverOverviewLayout.width(forProviderCount: 2) == 920)
-        #expect(PopoverOverviewLayout.width(forProviderCount: 3) == 1_220)
+    @Test("The overview keeps one-column dimensions and caps only oversized content")
+    func overviewUsesOneColumnDimensions() {
+        #expect(PopoverOverviewLayout.width == 620)
+        #expect(PopoverOverviewLayout.maximumAccountAreaHeight >= 900)
+        #expect(PopoverOverviewLayout.accountAreaHeight(measuredContentHeight: 480) == 480)
+        #expect(
+            PopoverOverviewLayout.accountAreaHeight(measuredContentHeight: 1_200)
+                == PopoverOverviewLayout.maximumAccountAreaHeight
+        )
     }
 
     @Test("Every configured Codex root stays visible before it has a sign-in file")

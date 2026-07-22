@@ -29,9 +29,15 @@ public struct ProfileRootCollection: Sendable, Equatable, Codable {
                     configurationDirectoryPath: homePath + "/.codex"
                 ),
                 ProfileRoot(
+                    id: Defaults.copilotCLIID,
+                    providerID: ProviderID("copilot"),
+                    label: "Copilot CLI",
+                    configurationDirectoryPath: homePath + "/.copilot"
+                ),
+                ProfileRoot(
                     id: Defaults.copilotID,
                     providerID: ProviderID("copilot"),
-                    label: "Copilot",
+                    label: "Copilot Editor",
                     configurationDirectoryPath: homePath + "/.config/github-copilot"
                 ),
             ]
@@ -180,6 +186,13 @@ public struct ProfileRootCollection: Sendable, Equatable, Codable {
                 uuid: (
                     0x75, 0x73, 0x61, 0x67, 0x65, 0x00, 0x40, 0x01, 0x80, 0x00, 0x00, 0x00,
                     0x00, 0x00, 0x00, 0x03
+                ))
+        )
+        static let copilotCLIID = ProfileRootID(
+            UUID(
+                uuid: (
+                    0x75, 0x73, 0x61, 0x67, 0x65, 0x00, 0x40, 0x01, 0x80, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x04
                 ))
         )
     }

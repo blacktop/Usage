@@ -22,9 +22,9 @@ public struct ClaudeProvider: Provider {
 
     /// One account per enabled configured root with file- or Keychain-backed CLI authentication.
     ///
-    /// Current Claude Code hashes `CLAUDE_CONFIG_DIR` into the Keychain service name, so the item
-    /// is root-scoped and distinct across profiles. Enumeration reads attributes and a persistent
-    /// row reference only; payload access remains subject to the context's interaction policy.
+    /// Claude Code uses an unsuffixed Keychain service for its default `~/.claude` root and hashes
+    /// an explicit `CLAUDE_CONFIG_DIR` into a root-scoped service. Enumeration reads attributes and
+    /// a persistent row reference only; payload access remains subject to the interaction policy.
     public func discoverAccounts(using context: ProviderContext) async throws -> [ProviderAccount] {
         var accounts: [ProviderAccount] = []
         for root in try await context.enabledProfileRoots(for: Self.id) {
@@ -32,12 +32,21 @@ public struct ClaudeProvider: Provider {
                 accounts.append(account)
                 continue
             }
-            let service = ClaudeCredentialFile.keychainService(root: root.directory)
-            let namespace = CredentialLocator(kind: .keychain, identifier: service)
-            guard let descriptor = try? await context.credentials.slots(in: namespace).first else {
-                continue
+            for service in Self.keychainServices(
+                root: root.directory,
+                homeDirectory: context.fileSystem.homeDirectory
+            ) {
+                let namespace = CredentialLocator(kind: .keychain, identifier: service)
+                guard
+                    let descriptors = try? await context.credentials.slots(in: namespace),
+                    let descriptor = Self.currentDescriptor(
+                        in: descriptors,
+                        homeDirectory: context.fileSystem.homeDirectory
+                    )
+                else { continue }
+                accounts.append(Self.keychainAccount(descriptor: descriptor, root: root))
+                break
             }
-            accounts.append(Self.keychainAccount(descriptor: descriptor, root: root))
         }
         return accounts
     }
@@ -46,14 +55,13 @@ public struct ClaudeProvider: Provider {
         for account: ProviderAccount,
         using context: ProviderContext
     ) async throws -> UsageReport {
-        let fallbackMetadata = Self.fileMetadata(for: account, using: context)
         let result = try await context.credentials.withCredential(at: account.locator) {
             credential in
             let metadata =
                 try credential.metadata {
                     (data: Data) throws(UsageError) -> ClaudeCredentialMetadata in
                     try ClaudeCredentialFile.parse(data, kind: account.locator.kind)
-                } ?? fallbackMetadata
+                } ?? Self.fileMetadata(for: account, using: context)
             if let metadata, metadata.isExpired(at: context.clock.now) {
                 throw UsageError(
                     category: .authenticationExpired,
@@ -147,12 +155,35 @@ public struct ClaudeProvider: Provider {
         )
     }
 
+    /// The default profile is special: Claude Code omits the config-directory hash unless
+    /// `CLAUDE_CONFIG_DIR` was explicitly supplied. Keep the hashed name as a compatibility
+    /// fallback for installations that previously launched the default path explicitly.
+    private static func keychainServices(root: URL, homeDirectory: URL) -> [String] {
+        let scoped = ClaudeCredentialFile.keychainService(root: root)
+        guard ClaudeCredentialFile.isDefaultRoot(root, homeDirectory: homeDirectory) else {
+            return [scoped]
+        }
+        return [ClaudeCredentialFile.keychainService, scoped]
+    }
+
+    /// Claude Code filters Keychain rows by the current macOS account. The injected home gives us
+    /// the same non-secret selector without consulting process globals. Do not borrow another
+    /// user's sole visible row: an account-label mismatch fails closed just as Claude Code does.
+    private static func currentDescriptor(
+        in descriptors: [CredentialSlotDescriptor],
+        homeDirectory: URL
+    ) -> CredentialSlotDescriptor? {
+        let userName = homeDirectory.standardizedFileURL.lastPathComponent
+        return descriptors.first { $0.displayName == userName }
+    }
+
     /// Metadata for the account's credential document, which is where the plan label and the local
     /// expiry check come from.
     ///
-    /// Read fresh on every fetch rather than cached at discovery, because Claude Code rewrites the
-    /// document whenever it refreshes and a cached expiry would reject a credential that has since
-    /// been renewed.
+    /// Only reached when the credential source handed back no document — the production file source
+    /// always does, so this costs nothing on the shipped path. Read fresh rather than cached at
+    /// discovery, because Claude Code rewrites the document whenever it refreshes and a cached
+    /// expiry would reject a credential that has since been renewed.
     private static func fileMetadata(
         for account: ProviderAccount,
         using context: ProviderContext

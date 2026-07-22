@@ -22,7 +22,7 @@ struct AccountCard: View {
     }
 
     let state: AccountState
-    let onRetry: () -> Void
+    let onRetry: (Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -101,7 +101,8 @@ struct AccountCard: View {
     }
 
     private func failure(_ error: UsageError) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let requiresCredentialApproval = error.requiresCredentialApproval
+        return VStack(alignment: .leading, spacing: 4) {
             Label(error.message, systemImage: "exclamationmark.triangle.fill")
                 .font(.caption)
                 .foregroundStyle(.orange)
@@ -115,9 +116,11 @@ struct AccountCard: View {
                         .textSelection(.enabled)
                 }
             }
-            Button("Try again", action: onRetry)
-                .buttonStyle(.link)
-                .font(.caption)
+            Button(requiresCredentialApproval ? "Approve & retry" : "Try again") {
+                onRetry(requiresCredentialApproval)
+            }
+            .buttonStyle(.link)
+            .font(.caption)
         }
     }
 

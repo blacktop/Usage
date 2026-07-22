@@ -44,21 +44,19 @@ struct PopoverAccountSection: Identifiable {
 }
 
 enum PopoverOverviewLayout {
-    static let accountAreaHeight: CGFloat = 640
+    static let width: CGFloat = 620
+    static let maximumAccountAreaHeight: CGFloat = 900
 
-    private static let singleProviderWidth: CGFloat = 620
-    private static let additionalProviderWidth: CGFloat = 300
-    private static let shippedProviderCount = 3
-
-    static func width(forProviderCount count: Int) -> CGFloat {
-        let columns = min(max(count, 1), shippedProviderCount)
-        return singleProviderWidth + CGFloat(columns - 1) * additionalProviderWidth
+    static func accountAreaHeight(measuredContentHeight: CGFloat) -> CGFloat {
+        min(max(measuredContentHeight, 1), maximumAccountAreaHeight)
     }
 }
 
 struct PopoverAccountList: View {
     let sections: [PopoverAccountSection]
-    let onRetry: () -> Void
+    let onRetry: (AccountKey, Bool) -> Void
+
+    @State private var measuredContentHeight = PopoverOverviewLayout.maximumAccountAreaHeight
 
     var body: some View {
         Group {
@@ -69,29 +67,31 @@ struct PopoverAccountList: View {
                     description: Text("Add a provider config folder in Settings.")
                 )
             } else {
-                VStack(spacing: 8) {
-                    HStack(alignment: .firstTextBaseline, spacing: 16) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
                         ForEach(sections) { section in
-                            ProviderSectionHeader(section: section)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 8) {
+                                ProviderSectionHeader(section: section)
+                                ProviderAccountRows(section: section, onRetry: onRetry)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-
-                    Divider()
-
-                    ScrollView {
-                        HStack(alignment: .top, spacing: 16) {
-                            ForEach(sections) { section in
-                                ProviderAccountRows(section: section, onRetry: onRetry)
-                                    .frame(maxWidth: .infinity, alignment: .top)
-                            }
-                        }
-                        .padding(.bottom, 2)
+                    .padding(.bottom, 2)
+                    .onGeometryChange(for: CGFloat.self) { geometry in
+                        geometry.size.height
+                    } action: { height in
+                        measuredContentHeight = height
                     }
                 }
+                .frame(
+                    height: PopoverOverviewLayout.accountAreaHeight(
+                        measuredContentHeight: measuredContentHeight
+                    )
+                )
+                .scrollBounceBehavior(.basedOnSize)
             }
         }
-        .frame(height: PopoverOverviewLayout.accountAreaHeight)
         .accessibilityIdentifier("provider-account-list")
     }
 }
@@ -108,12 +108,17 @@ private struct ProviderSectionHeader: View {
 
 private struct ProviderAccountRows: View {
     let section: PopoverAccountSection
-    let onRetry: () -> Void
+    let onRetry: (AccountKey, Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(section.accounts) { state in
-                AccountCard(state: state, onRetry: onRetry)
+                AccountCard(
+                    state: state,
+                    onRetry: { requiresCredentialApproval in
+                        onRetry(state.account.key, requiresCredentialApproval)
+                    }
+                )
             }
 
             ForEach(section.unrepresentedProfiles) { profile in

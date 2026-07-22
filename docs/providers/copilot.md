@@ -4,23 +4,35 @@
 
 | | |
 |---|---|
-| Credential | `~/.config/github-copilot/{apps.json, hosts.json, oauth.json}` |
-| Owner | the Copilot editor plugin (`apps.json`, `hosts.json`) and the Copilot CLI (`oauth.json`) |
+| Credential | `copilot-cli` Keychain, account-bound `gh auth token --user`, or configured-root legacy files |
+| Owner | Copilot CLI, GitHub CLI, or the Copilot editor plugin |
 | Access | read-only, through the injected `ProviderFileSystem` and `CredentialSource` |
-| Keychain | none. Usage issues no Keychain query for Copilot |
+| Keychain | attributes-only discovery; payload read only during a provider fetch |
 
-Each file is a JSON object of entries. Entries are read in sorted-key order so discovery is
-deterministic, and one GitHub host produces at most one account: `apps.json` beats `hosts.json`
-beats `oauth.json`, matching the order the tools migrated through.
+Current CLI credentials take precedence in the same order as Copilot CLI: the `copilot-cli`
+Keychain service, then GitHub CLI. Usage enumerates only public attributes from GitHub CLI's
+`gh:github.com` Keychain rows and creates one locator per login. It does not run `gh auth status`
+during discovery. Fetch asks `gh auth token --hostname github.com --user <login>` for the exact
+discovered account, so changing the active `gh` account cannot silently reassign usage. These
+host-wide credentials are attached once to the first enabled Copilot root and supersede a legacy
+file entry for `github.com`.
 
-`CredentialLocator(kind: .file, identifier: "<home>/.config/github-copilot/apps.json", path: ["<clientID>:<host>", "oauth_token"])`.
+Legacy files remain supported for editor and enterprise-host profiles. Each file is a JSON object
+of entries. Entries are read in sorted-key order so discovery is deterministic, and one GitHub host
+produces at most one file-backed account per root: `apps.json` beats `hosts.json` beats `oauth.json`.
+
+`CredentialLocator(kind: .file, identifier: "<configured-root>/apps.json", path: ["<clientID>:<host>", "oauth_token"])`.
+
+A `githubCLI` locator names `github.com` and carries the validated public login as its sole path
+component. The source invokes the Homebrew `gh` executable directly without a shell; token output
+exists only inside the credential-scoped fetch.
+A `copilot-cli` Keychain locator carries the enumerated row's persistent reference.
 
 ### Fields read
 
 | JSON path | Use | Secret |
 |---|---|---|
 | `<entry>.oauth_token` / `.access_token` / `.token` | bearer token, resolved inside one fetch | yes |
-| `<entry>.user` / `.login` / `.github_user` | display label only | no |
 | the entry's own map key | slot identity, and the GitHub host | no |
 
 `apps.json` keys are `<githubAppClientID>:<host>`, so the host is the part after the last `:`. The
@@ -29,22 +41,24 @@ enterprise host `octocorp.ghe.com` from `api.octocorp.ghe.com`.
 
 ### Shape tolerance
 
-These files belong to tools that version independently of Usage, and **their internal key names are
+The legacy files belong to tools that version independently of Usage, and **their internal key names are
 not part of any published contract**. The parser therefore accepts three spellings of the token
-member and three of the login, decodes entry by entry, and contributes zero accounts rather than an
-error when a file's shape is unrecognised. `oauth.json` in particular is a best-effort source: its
-structure is inferred, not verified, and whether the token it holds is even accepted by
-`/copilot_internal/user` is unknown.
+member, decodes entry by entry, and contributes zero accounts rather than an error when a file's
+shape is unrecognised. `oauth.json` is a legacy best-effort source; current Copilot CLI versions use
+the OS Keychain or GitHub CLI authentication instead.
 
 `XDG_CONFIG_HOME` is not honoured. Providers read no ambient process state; the home directory
 arrives through `ProviderFileSystem`.
 
 ## What Usage never does
 
-- Never writes any file under `~/.config/github-copilot`.
+- Never writes any file under a configured Copilot root, including `~/.copilot`.
 - Never runs a device flow. There is no `POST /login/device/code` and no
   `POST /login/oauth/access_token`.
-- Never writes or deletes a Keychain item.
+- Never writes or deletes a Keychain item, and never reads token bytes during discovery.
+- Never runs `copilot` or `/usr/bin/security`. It runs a fixed, non-shell `gh auth token` command
+  with the discovered login passed through `--user`; Keychain row ordering and the active-account
+  setting cannot select a different credential.
 - Never reads browser cookies. The dollar-denominated GitHub *spending* budgets are only reachable
   by scraping `github.com` session cookies and an HTML nonce; that needs a third-party dependency
   and a browser-credential read, so it is out of scope. "Monthly budget" is satisfied from
@@ -58,7 +72,7 @@ refresh even if Usage wanted to.
 
 ```
 GET https://api.github.com/copilot_internal/user
-Authorization: token <oauth_token>
+Authorization: Bearer <oauth_token>
 Accept: application/json
 Editor-Version: vscode/1.96.2
 Editor-Plugin-Version: copilot-chat/0.26.7
@@ -69,8 +83,7 @@ X-GitHub-Api-Version: 2025-04-01
 No query string, no body. An enterprise host is addressed as
 `https://api.<host>/copilot_internal/user`.
 
-Authorization uses GitHub's `token` scheme, **not** `Bearer`, and carries the raw OAuth token rather
-than an exchanged short-lived Copilot token.
+Authorization uses the `Bearer` scheme sent by the current Copilot CLI to this endpoint.
 
 The editor identity triple is a deliberate spoof: this is an editor-internal endpoint and its
 behaviour under a truthful `Usage/<version>` agent is unknown and untestable offline. Those pinned
@@ -103,9 +116,10 @@ windows. Only a 200 whose shape is entirely unrecognised is a decode failure.
 
 ## Account identity
 
-Identity is the credential slot: `copilot.<fileName>` plus the entry's own map key. That is derived
-from a filename and a public GitHub App client ID, contains no token material, is stable across
-launches, and keeps two accounts in the same file distinct.
+Identity is the credential slot. A file-backed slot is `copilot.<fileName>` plus the entry's own map
+key. A global slot is the validated GitHub host plus either the Keychain row's non-secret account
+attribute or the bound GitHub CLI login. Neither form contains token material, and both survive a
+token rewrite in place.
 
 Promotion to GitHub's canonical `github:user:<id>` — the stable, immutable, rename-proof identifier
 from `GET /user` — is **deferred**. It needs a second request per account and only becomes useful
@@ -120,6 +134,8 @@ once the identity alias map exists, so it is not implemented rather than half-im
 | HTTP 403 otherwise | `.authenticationExpired` |
 | HTTP 429 | `.rateLimited`, honouring `Retry-After` in both forms |
 | Token missing or empty in the file | that entry contributes no account |
+| Keychain access denied or interaction required | `.interactionRequired`, no background prompt |
+| GitHub CLI absent, signed out, or unable to resolve the named account's token | `.credentialUnavailable` |
 
 GitHub overloads 403 across a revoked token, a seat without Copilot, and secondary rate limiting.
 Telling a throttled user to sign in again is advice they cannot act on, so a 403 carrying a
@@ -130,7 +146,9 @@ never read for classification and never retained.
 
 - from `apps.json` or `hosts.json`: re-authenticate in the editor — run **GitHub Copilot: Sign In**
   from the Command Palette, or use the Copilot status icon.
-- from `oauth.json`: re-authenticate in the GitHub Copilot CLI.
+- from `copilot-cli`: run `copilot login`.
+- from GitHub CLI: run `gh auth login` for the named account.
+- from `oauth.json`: re-authenticate in the legacy Copilot CLI that owns it.
 - on an enterprise host: sign in against that host specifically.
 
 The message renders the GitHub login and host, never the token, never a token prefix, never a byte

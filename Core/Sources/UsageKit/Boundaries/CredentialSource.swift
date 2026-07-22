@@ -8,11 +8,13 @@ public struct CredentialLocator: Sendable, Hashable {
     public enum Kind: String, Sendable, Hashable, Codable, CaseIterable {
         case file
         case keychain
+        case githubCLI
 
         var noun: String {
             switch self {
             case .file: "file system"
             case .keychain: "keychain"
+            case .githubCLI: "GitHub CLI"
             }
         }
     }
@@ -22,11 +24,11 @@ public struct CredentialLocator: Sendable, Hashable {
     public let identifier: String
     /// Key path to the secret inside the document the address resolves to.
     ///
-    /// Every credential Usage reads is a JSON document owned by another agent, and none of them
-    /// stores the bearer token at the root: Codex keeps it at `tokens.access_token`, Claude at
-    /// `claudeAiOauth.accessToken`, Copilot at `<clientID>:<host>.oauth_token`. Components are
-    /// listed rather than joined so a key containing `.` or `:` stays unambiguous. Empty means the
-    /// whole document is the secret.
+    /// Document-backed credentials store the bearer token below the root: Codex keeps it at
+    /// `tokens.access_token`, Claude at `claudeAiOauth.accessToken`, and legacy Copilot files at
+    /// `<clientID>:<host>.oauth_token`. Components are listed rather than joined so a key
+    /// containing `.` or `:` stays unambiguous. Non-document sources may use it for a non-secret
+    /// selector, such as the GitHub login passed to `gh auth token --user`.
     public let path: [String]
 
     public init(kind: Kind, identifier: String, path: [String] = []) {

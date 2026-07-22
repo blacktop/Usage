@@ -26,8 +26,8 @@ struct KeychainItemReference: Hashable, Sendable {
 /// Under the background policy — which every scheduled refresh and the whole CLI run under — every
 /// query carries `KeychainNoUIPolicy`, so a refresh can never raise an Allow/Deny or password
 /// dialog: it fails with `errSecInteractionNotAllowed`, which becomes `.interactionRequired`. A
-/// Settings action retries the same locator under `UserInitiatedInteractionPolicy`, which is the
-/// one construction that omits the no-UI markers and therefore the one that can prompt.
+/// explicit account action retries the same locator under `UserInitiatedInteractionPolicy`, which
+/// is the one construction that omits the no-UI markers and therefore the one that can prompt.
 ///
 /// Enumeration is attributes-only — `kSecReturnData` is absent from that query by construction —
 /// so discovering which accounts exist can never read one.
@@ -75,9 +75,10 @@ public struct KeychainCredentialSource: CredentialSource {
 
     /// `query` with the no-UI markers applied, unless the caller's policy permits credential UI.
     ///
-    /// This is the whole difference between a background read and a Settings retry. Applying the
-    /// markers unconditionally would make `UserInitiatedInteractionPolicy` inert and leave the
-    /// `.interactionRequired` message telling the user to do something with no implementation.
+    /// This is the whole difference between a background read and an explicit approval action.
+    /// Applying the markers unconditionally would make `UserInitiatedInteractionPolicy` inert and
+    /// leave the `.interactionRequired` message telling the user to do something with no
+    /// implementation.
     func policed(_ query: [String: Any]) -> [String: Any] {
         allowsCredentialUI ? query : noUI.applied(to: query)
     }
@@ -94,10 +95,22 @@ public struct KeychainCredentialSource: CredentialSource {
                 throw UsageError.credentialUnavailable(kind: .keychain)
             }
             return data
-        case errSecInteractionNotAllowed, errSecAuthFailed:
-            throw UsageError.interactionForbidden()
         default:
-            throw UsageError.credentialUnavailable(kind: .keychain)
+            throw Self.failure(for: status)
+        }
+    }
+
+    /// The redacted application error for a failed payload query.
+    ///
+    /// `errSecUserCanceled` includes authorization dialogs dismissed by the user and denials the
+    /// Security framework returns without displaying one. Neither means the credential is absent;
+    /// both mean a deliberate approval attempt is required.
+    static func failure(for status: OSStatus) -> UsageError {
+        switch status {
+        case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
+            .interactionForbidden()
+        default:
+            .credentialUnavailable(kind: .keychain)
         }
     }
 

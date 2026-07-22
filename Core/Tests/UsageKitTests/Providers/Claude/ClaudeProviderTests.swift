@@ -12,15 +12,18 @@ struct ClaudeProviderTests {
 
     private static func keychainDescriptor(
         root: URL,
-        identifier: String
+        identifier: String,
+        service: String? = nil,
+        account: String = "fixture"
     ) -> (CredentialLocator, CredentialSlotDescriptor) {
-        let service = ClaudeCredentialFile.keychainService(root: root)
+        let service = service ?? ClaudeCredentialFile.keychainService(root: root)
         let namespace = CredentialLocator(kind: .keychain, identifier: service)
         return (
             namespace,
             CredentialSlotDescriptor(
-                slot: CredentialSlotID(source: "keychain:\(service)", opaqueID: "fixture-user"),
-                locator: CredentialLocator(kind: .keychain, identifier: identifier)
+                slot: CredentialSlotID(source: "keychain:\(service)", opaqueID: account),
+                locator: CredentialLocator(kind: .keychain, identifier: identifier),
+                displayName: account
             )
         )
     }
@@ -119,12 +122,101 @@ struct ClaudeProviderTests {
 
     // MARK: - Root-scoped Keychain credentials
 
-    @Test("the OAuth Keychain service is stable for a canonical Claude root")
+    @Test("the root-scoped OAuth Keychain service is stable for a canonical Claude root")
     func keychainServiceName() {
         #expect(
             ClaudeCredentialFile.keychainService(root: ProviderFixtures.claudeRoot)
                 == "Claude Code-credentials-45fdef0d"
         )
+    }
+
+    @Test("the default Claude root uses the unsuffixed service before its compatibility fallback")
+    func defaultRootUsesUnsuffixedService() async throws {
+        let current = Self.keychainDescriptor(
+            root: ProviderFixtures.claudeRoot,
+            identifier: "persistent-current",
+            service: ClaudeCredentialFile.keychainService
+        )
+        let fallback = Self.keychainDescriptor(
+            root: ProviderFixtures.claudeRoot,
+            identifier: "persistent-fallback"
+        )
+        let credentials = SealedCredentialSource(
+            slots: [current.0: [current.1], fallback.0: [fallback.1]]
+        )
+
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(
+                using: ProviderContext.sealed(credentials: credentials)
+            ).first
+        )
+
+        #expect(account.locator.identifier == "persistent-current")
+        #expect(credentials.enumeratedNamespaces == [current.0])
+    }
+
+    @Test("the default Claude root accepts the hashed service when the unsuffixed item is absent")
+    func defaultRootFallsBackToHashedService() async throws {
+        let current = CredentialLocator(
+            kind: .keychain,
+            identifier: ClaudeCredentialFile.keychainService
+        )
+        let fallback = Self.keychainDescriptor(
+            root: ProviderFixtures.claudeRoot,
+            identifier: "persistent-fallback"
+        )
+        let credentials = SealedCredentialSource(slots: [fallback.0: [fallback.1]])
+
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(
+                using: ProviderContext.sealed(credentials: credentials)
+            ).first
+        )
+
+        #expect(account.locator.identifier == "persistent-fallback")
+        #expect(credentials.enumeratedNamespaces == [current, fallback.0])
+    }
+
+    @Test("Claude selects the Keychain row for the injected home user")
+    func selectsCurrentUserKeychainRow() async throws {
+        let other = Self.keychainDescriptor(
+            root: ProviderFixtures.claudeRoot,
+            identifier: "persistent-other",
+            service: ClaudeCredentialFile.keychainService,
+            account: "someone-else"
+        )
+        let current = Self.keychainDescriptor(
+            root: ProviderFixtures.claudeRoot,
+            identifier: "persistent-current",
+            service: ClaudeCredentialFile.keychainService
+        )
+        let credentials = SealedCredentialSource(slots: [current.0: [other.1, current.1]])
+
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(
+                using: ProviderContext.sealed(credentials: credentials)
+            ).first
+        )
+
+        #expect(account.locator.identifier == "persistent-current")
+    }
+
+    @Test("Claude never borrows a Keychain row belonging to another macOS user")
+    func rejectsOtherUsersSoleKeychainRow() async throws {
+        let other = Self.keychainDescriptor(
+            root: ProviderFixtures.claudeRoot,
+            identifier: "persistent-other",
+            service: ClaudeCredentialFile.keychainService,
+            account: "someone-else"
+        )
+        let credentials = SealedCredentialSource(slots: [other.0: [other.1]])
+
+        let accounts = try await ClaudeProvider().discoverAccounts(
+            using: ProviderContext.sealed(credentials: credentials)
+        )
+
+        #expect(accounts.isEmpty)
+        #expect(credentials.resolvedLocators.isEmpty)
     }
 
     @Test("discovers every configured Claude root through its distinct Keychain service")

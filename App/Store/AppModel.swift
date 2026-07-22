@@ -6,8 +6,7 @@ import UsageKit
 /// is the only place the three know about each other.
 ///
 /// The store stays free of scheduling and the coordinator stays free of UI; this holds both and
-/// forwards the three things a user can actually ask for — refresh now, the popover opened, the
-/// popover closed.
+/// forwards the things a user can actually ask for: refresh now and approve a protected credential.
 @Observable
 @MainActor
 final class AppModel {
@@ -28,6 +27,7 @@ final class AppModel {
     @ObservationIgnored let fileSystem: any ProviderFileSystem
 
     @ObservationIgnored private let coordinator: RefreshCoordinator
+    @ObservationIgnored private let interactiveCredentials: any CredentialSource
     @ObservationIgnored private var lifecycle: RefreshLifecycle?
     @ObservationIgnored private var hasStarted = false
     @ObservationIgnored private var profileLoadGeneration = 0
@@ -35,6 +35,7 @@ final class AppModel {
     init(
         registry: ProviderRegistry,
         context: ProviderContext,
+        interactiveCredentials: (any CredentialSource)? = nil,
         configuration: RefreshCoordinator.Configuration = RefreshCoordinator.Configuration()
     ) {
         let store = UsageStore()
@@ -42,6 +43,7 @@ final class AppModel {
         self.registry = registry
         profileRoots = context.profileRoots
         fileSystem = context.fileSystem
+        self.interactiveCredentials = interactiveCredentials ?? context.credentials
         coordinator = RefreshCoordinator(
             registry: registry,
             context: context,
@@ -56,7 +58,15 @@ final class AppModel {
     /// No `PreviewProvider`: its three synthetic accounts belong to the suites that exercise the
     /// store and the popover, not to a shipped menu bar showing a user their real quota.
     static func live() -> AppModel {
-        AppModel(registry: .agents, context: .system())
+        let context = ProviderContext.system()
+        return AppModel(
+            registry: .agents,
+            context: context,
+            interactiveCredentials: SystemCredentialSource(
+                fileSystem: context.fileSystem,
+                interaction: UserInitiatedInteractionPolicy()
+            )
+        )
     }
 
     /// Discovers accounts, runs the first refresh, and starts listening for sleep and wake.
@@ -77,6 +87,15 @@ final class AppModel {
     func refreshNow() async {
         await reloadConfiguredProfiles()
         await coordinator.refresh()
+    }
+
+    /// User-initiated recovery for a Keychain-backed account.
+    ///
+    /// This is intentionally separate from `refreshNow()`: scheduled and generic manual refreshes
+    /// must remain unable to raise credential UI. The coordinator retains the secret-free locator,
+    /// performs one approval read, and then retries through its ordinary background context.
+    func approveCredentialAccess(for key: AccountKey) async {
+        await coordinator.approveCredentialAccess(for: key, using: interactiveCredentials)
     }
 
     /// Refreshes the non-secret configured-folder projection used by the popover.

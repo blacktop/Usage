@@ -15,16 +15,21 @@ struct ProfileRootTests {
         #expect(
             first.profiles.map(\.providerID) == [
                 ProviderID("claude"), ProviderID("codex"), ProviderID("copilot"),
+                ProviderID("copilot"),
             ])
-        #expect(first.profiles.map(\.label) == ["Claude", "Codex", "Copilot"])
+        #expect(
+            first.profiles.map(\.label)
+                == ["Claude", "Codex", "Copilot CLI", "Copilot Editor"]
+        )
         #expect(
             first.profiles.map(\.configurationDirectoryPath) == [
                 "/Users/injected-home/.claude",
                 "/Users/injected-home/.codex",
+                "/Users/injected-home/.copilot",
                 "/Users/injected-home/.config/github-copilot",
             ])
-        #expect(first.profiles.map(\.isEnabled) == [true, true, true])
-        #expect(Set(first.profiles.map(\.id)).count == 3)
+        #expect(first.profiles.map(\.isEnabled) == [true, true, true, true])
+        #expect(Set(first.profiles.map(\.id)).count == 4)
     }
 
     @Test("Paths normalize lexically and a blank label uses the directory name")

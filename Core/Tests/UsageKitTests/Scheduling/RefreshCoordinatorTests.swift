@@ -19,13 +19,14 @@ struct RefreshCoordinatorTests {
         _ providers: [any Provider],
         clock: GatedClock,
         sink: EventLog,
+        credentials: any CredentialSource = InMemoryCredentialSource(),
         stagger: Duration = .zero
     ) -> RefreshCoordinator {
         RefreshCoordinator(
             registry: ProviderRegistry(providers: providers),
             context: ProviderContext(
                 http: InMemoryHTTPTransport(),
-                credentials: InMemoryCredentialSource(),
+                credentials: credentials,
                 fileSystem: InMemoryFileSystem(),
                 clock: clock,
                 interaction: BackgroundInteractionPolicy()
@@ -72,6 +73,93 @@ struct RefreshCoordinatorTests {
         #expect(first.accountKey == provider.key("a"))
         #expect(second.accountKey == provider.key("b"))
         await coordinator.suspend()
+    }
+
+    @Test("credential approval performs the fetch inside the one authorized read")
+    func credentialApprovalRetriesTheAccount() async throws {
+        let provider = CredentialReadingProvider()
+        let account = provider.account
+        let backgroundCredentials = InMemoryCredentialSource(
+            secrets: [account.locator: "FAKE-access-token-0000"],
+            interactiveOnly: [account.locator]
+        )
+        let interactiveCredentials = InMemoryCredentialSource(
+            secrets: [account.locator: "FAKE-access-token-0000"],
+            interactiveOnly: [account.locator],
+            interaction: UserInitiatedInteractionPolicy()
+        )
+        let log = EventLog()
+        let coordinator = coordinator(
+            [provider],
+            clock: GatedClock(),
+            sink: log,
+            credentials: backgroundCredentials
+        )
+        await coordinator.refresh()
+
+        await coordinator.approveCredentialAccess(
+            for: account.key,
+            using: interactiveCredentials
+        )
+
+        #expect(interactiveCredentials.resolvedLocators == [account.locator])
+        #expect(
+            backgroundCredentials.resolvedLocators == [account.locator],
+            "approval must not issue a second background credential read"
+        )
+        #expect(provider.fetchCount == 2)
+        #expect(await log.reports(for: account.key).count == 1)
+        #expect(await log.failures(for: account.key) == [.interactionForbidden()])
+        await coordinator.suspend()
+    }
+
+    @Test("a declined credential approval reports the authorization failure without succeeding")
+    func declinedCredentialApprovalDoesNotFetch() async throws {
+        let provider = CredentialReadingProvider()
+        let account = provider.account
+        let backgroundCredentials = InMemoryCredentialSource(
+            secrets: [account.locator: "FAKE-access-token-0000"],
+            interactiveOnly: [account.locator]
+        )
+        let log = EventLog()
+        let coordinator = coordinator(
+            [provider],
+            clock: GatedClock(),
+            sink: log,
+            credentials: backgroundCredentials
+        )
+        await coordinator.refresh()
+
+        await coordinator.approveCredentialAccess(for: account.key, using: backgroundCredentials)
+
+        #expect(provider.fetchCount == 2)
+        #expect(await log.reports(for: account.key).isEmpty)
+        #expect(await log.failures(for: account.key).last == .interactionForbidden())
+        await coordinator.suspend()
+    }
+
+    @Test("credential approval during suspension waits for wake before fetching")
+    func credentialApprovalRespectsSuspension() async throws {
+        let provider = StubProvider(accountIDs: ["a"])
+        let account = try #require(provider.accounts.first)
+        let interactiveCredentials = InMemoryCredentialSource(
+            secrets: [account.locator: "FAKE-access-token-0000"],
+            interaction: UserInitiatedInteractionPolicy()
+        )
+        let log = EventLog()
+        let coordinator = coordinator([provider], clock: GatedClock(), sink: log)
+        await coordinator.refresh()
+        await coordinator.suspend()
+
+        await coordinator.approveCredentialAccess(
+            for: account.key,
+            using: interactiveCredentials
+        )
+
+        #expect(provider.fetchCount("a") == 1)
+        #expect(interactiveCredentials.resolvedLocators.isEmpty)
+        #expect(await log.events.last == .scheduled(key: account.key))
+        #expect(!(await coordinator.hasScheduler))
     }
 
     @Test("An account-scoped 429 delays only that account")
