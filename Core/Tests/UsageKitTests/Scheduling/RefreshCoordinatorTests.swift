@@ -587,6 +587,54 @@ struct RefreshCoordinatorTests {
         await coordinator.suspend()
     }
 
+    @Test(
+        "A vanished credential forces rediscovery on its retry wave",
+        .timeLimit(.minutes(1))
+    )
+    func credentialFailureForcesRediscovery() async throws {
+        let clock = GatedClock()
+        let provider = StubProvider(accountIDs: ["a"])
+        provider.fail("a", with: .credentialUnavailable(kind: .keychain))
+        let coordinator = coordinator([provider], clock: clock, sink: EventLog())
+
+        await coordinator.refresh()
+        #expect(provider.discoveryCount == 1)
+
+        _ = await clock.nextSleep()
+        clock.fireOldestSleep()
+        while provider.fetchCount("a") < 2 { await Task.yield() }
+
+        #expect(
+            provider.discoveryCount == 2,
+            "the retry re-resolved the stale locator before fetching"
+        )
+        await coordinator.suspend()
+    }
+
+    @Test(
+        "A provider failure keeps the coarse discovery interval",
+        .timeLimit(.minutes(1))
+    )
+    func providerFailureDoesNotForceRediscovery() async throws {
+        let clock = GatedClock()
+        let provider = StubProvider(accountIDs: ["a"])
+        provider.fail("a", with: .transportFailure())
+        let coordinator = coordinator([provider], clock: clock, sink: EventLog())
+
+        await coordinator.refresh()
+        #expect(provider.discoveryCount == 1)
+
+        _ = await clock.nextSleep()
+        clock.fireOldestSleep()
+        while provider.fetchCount("a") < 2 { await Task.yield() }
+
+        #expect(
+            provider.discoveryCount == 1,
+            "a network failure says nothing about the credential store"
+        )
+        await coordinator.suspend()
+    }
+
     @Test("A report keyed to another account is refused rather than written to it")
     func crossAccountReportsAreRefused() async throws {
         let provider = StubProvider(accountIDs: ["a", "b"])

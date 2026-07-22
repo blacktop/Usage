@@ -12,8 +12,14 @@ import Foundation
 /// the plan gates the input on that table. `PopoverRoot` still records appearances for the human
 /// running the spike; nothing feeds them into scheduling.
 public enum RefreshPolicy {
-    /// The one cadence, until the lifecycle spike says a second one can be trusted.
+    /// The one provider-facing cadence, until the lifecycle spike says a second one can be
+    /// trusted.
     public static let idleInterval = Duration.seconds(300)
+    /// Base cadence for retrying a failure that never produced a provider request: a credential
+    /// that could not be read because the keychain was locked or its item was rotated out from
+    /// under the cached locator. Local and free to retry, so recovery is fast; the doubling and
+    /// the ceiling still apply.
+    public static let credentialRecoveryInterval = Duration.seconds(30)
     /// Upper bound on failure backoff.
     public static let backoffCeiling = Duration.seconds(1_800)
     /// How long after a window's reset instant the refresh that observes it happens.
@@ -39,10 +45,11 @@ public enum RefreshPolicy {
         return max(minimumDelay, honoured + jitter(for: input.key, of: honoured))
     }
 
-    /// Base cadence, doubled once per consecutive failure and capped at the ceiling.
+    /// Base cadence, doubled once per consecutive failure and capped at the ceiling. A failure
+    /// that never left the machine backs off from the short credential-recovery base instead.
     private static func cadence(for input: AccountRefreshInput) -> Duration {
-        let base = idleInterval
-        guard input.consecutiveFailures > 0 else { return base }
+        guard input.consecutiveFailures > 0 else { return idleInterval }
+        let base = input.isCredentialRecovery ? credentialRecoveryInterval : idleInterval
         let doublings = min(input.consecutiveFailures - 1, maximumDoublings)
         return min(base * (1 << doublings), backoffCeiling)
     }

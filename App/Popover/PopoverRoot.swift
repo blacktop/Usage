@@ -6,6 +6,9 @@ struct PopoverRoot: View {
     let lifecycle: MenuLifecycleRecorder
     let model: AppModel
 
+    @AppStorage(LiquidGlassStyle.storageKey)
+    private var liquidity = LiquidGlassStyle.defaultIntensity
+
     private var store: UsageStore { model.store }
     private var sections: [PopoverAccountSection] {
         PopoverAccountSection.sections(
@@ -16,19 +19,35 @@ struct PopoverRoot: View {
     }
 
     var body: some View {
+        let glass = LiquidGlassStyle(intensity: liquidity)
         let sections = sections
         return VStack(alignment: .leading, spacing: 12) {
-            PopoverHeader(isRefreshing: store.isRefreshing, refresh: refresh)
-            Divider()
-            PopoverAccountList(sections: sections, onRetry: retry)
+            PopoverHeader(isRefreshing: store.isRefreshing, glass: glass, refresh: refresh)
+            if !glass.usesGlassIslands {
+                Divider()
+            }
+            PopoverAccountList(sections: sections, glass: glass, onRetry: retry)
             DiscoveryFailureList(failures: store.discoveryFailures)
 
-            Divider()
+            if !glass.usesGlassIslands {
+                Divider()
+            }
 
-            PopoverFooter(quit: quit)
+            PopoverFooter(glass: glass, quit: quit)
         }
         .padding(14)
         .frame(width: PopoverOverviewLayout.width)
+        // Once liquidity strips the window's stock glass frame, this rounded material is the
+        // whole backdrop; it fades with the slider until only the glass islands remain over the
+        // desktop. At Flat the stock frame is intact and no custom backdrop is drawn.
+        .background {
+            if glass.usesCustomWindowBackdrop {
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(.ultraThinMaterial)
+                    .opacity(glass.backdropAlpha)
+            }
+        }
+        .background(PopoverWindowBackdrop(alpha: glass.backdropAlpha))
         // Instrumentation only. These counts are what a human reads out of the unified log to fill
         // in the results table in docs/menu-bar-lifecycle.md. Nothing here feeds scheduling: until
         // that table shows appearances and disappearances pairing, the appearance signal is not
@@ -59,22 +78,43 @@ struct PopoverRoot: View {
 
 private struct PopoverHeader: View {
     let isRefreshing: Bool
+    let glass: LiquidGlassStyle
     let refresh: () -> Void
 
     var body: some View {
+        if glass.usesGlassIslands {
+            row
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .glassEffect(.regular, in: .capsule)
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
         HStack {
             Text("Usage")
                 .font(.headline)
             Spacer()
-            Button(action: refresh) {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 16, height: 16)
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .disabled(isRefreshing)
-            .accessibilityLabel("Refresh")
-            .help("Refresh usage")
+            refreshButton
+                .controlSize(.small)
+                .disabled(isRefreshing)
+                .accessibilityLabel("Refresh")
+                .help("Refresh usage")
+        }
+    }
+
+    @ViewBuilder
+    private var refreshButton: some View {
+        let button = Button(action: refresh) {
+            Image(systemName: "arrow.clockwise")
+                .frame(width: 16, height: 16)
+        }
+        if glass.usesGlassControls {
+            button.buttonStyle(.glass)
+        } else {
+            button.buttonStyle(.borderless)
         }
     }
 }
@@ -98,9 +138,21 @@ private struct DiscoveryFailureList: View {
 private struct PopoverFooter: View {
     @Environment(\.openSettings) private var openSettings
 
+    let glass: LiquidGlassStyle
     let quit: () -> Void
 
     var body: some View {
+        if glass.usesGlassIslands {
+            row
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .glassEffect(.regular, in: .capsule)
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
         HStack {
             Button("Settings…") {
                 SettingsWindowPresenter(

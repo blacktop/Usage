@@ -42,4 +42,12 @@ public struct AccountRefreshInput: Sendable, Hashable {
         guard case .failure(let error) = outcome else { return nil }
         return error.retry
     }
+
+    /// Whether the last failure was a local credential read — a locked keychain, or an item
+    /// rotated out from under the cached locator — that never produced a provider request.
+    /// These are free to retry, so they recover on the short cadence instead of the provider one.
+    var isCredentialRecovery: Bool {
+        guard case .failure(let error) = outcome else { return false }
+        return error.category == .credentialUnavailable || error.category == .interactionRequired
+    }
 }

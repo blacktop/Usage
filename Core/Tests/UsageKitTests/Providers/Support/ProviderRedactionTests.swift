@@ -159,10 +159,10 @@ struct ProviderRedactionTests {
         )
     }
 
-    /// The paths the happy-path suites never reach: an expired Claude credential, a Codex file with
-    /// only an API key, and a Copilot account on a secondary host. Each carries a token the happy
-    /// path does not, and each renders through a different branch.
-    @Test("an expired Claude credential leaks nothing through the unavailable path")
+    /// Less common credential shapes: a locally expired Claude document, a Codex file with only an
+    /// API key, and a Copilot account on a secondary host. Each carries a token the happy path does
+    /// not, and each renders through a different branch.
+    @Test("a locally expired Claude credential leaks nothing through provider validation")
     func expiredClaudeAccountKeepsNoSecrets() async throws {
         let credentialURL = ClaudeCredentialFile.url(root: ProviderFixtures.claudeRoot)
         let context = ProviderContext.sealed(
@@ -177,7 +177,7 @@ struct ProviderRedactionTests {
         let account = try #require(
             try await ClaudeProvider().discoverAccounts(using: context).first
         )
-        #expect(account.availability == .unavailable)
+        #expect(account.availability == .active)
         assertNoSecrets(in: descriptorText(of: account))
     }
 

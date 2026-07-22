@@ -4,20 +4,43 @@ import UsageKit
 /// One compact provider surface: account legend, grouped usage meters, and account-specific issues.
 struct ProviderUsageCard: View {
     let section: PopoverAccountSection
+    let glass: LiquidGlassStyle
     let onRetry: (AccountKey, Bool) -> Void
 
     private let presentation: ProviderUsagePresentation
 
     init(
         section: PopoverAccountSection,
+        glass: LiquidGlassStyle,
         onRetry: @escaping (AccountKey, Bool) -> Void
     ) {
         self.section = section
+        self.glass = glass
         self.onRetry = onRetry
         presentation = ProviderUsagePresentation(section: section)
     }
 
     var body: some View {
+        // Glass here is legitimate only once the window backdrop is fully faded: the card then
+        // samples the desktop. With any backdrop present it would be glass on glass, which
+        // renders as unreadable murk — so the card falls back to a flat content-layer fill.
+        if glass.usesGlassIslands {
+            content
+                .glassEffect(.regular, in: .rect(cornerRadius: glass.cardCornerRadius))
+        } else {
+            content
+                .background(
+                    .primary.opacity(glass.cardFillOpacity),
+                    in: .rect(cornerRadius: glass.cardCornerRadius)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: glass.cardCornerRadius)
+                        .stroke(.primary.opacity(0.07), lineWidth: 1)
+                }
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
             ProviderCardHeader(
                 title: section.displayName,
@@ -33,11 +56,6 @@ struct ProviderUsageCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.primary.opacity(0.045), in: .rect(cornerRadius: 11))
-        .overlay {
-            RoundedRectangle(cornerRadius: 11)
-                .stroke(.primary.opacity(0.07), lineWidth: 1)
-        }
         .accessibilityIdentifier("provider-card-\(section.id.rawValue)")
     }
 }

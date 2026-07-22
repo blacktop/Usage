@@ -88,13 +88,13 @@ struct ClaudeProviderTests {
         #expect(try await ClaudeProvider().discoverAccounts(using: context).isEmpty)
     }
 
-    @Test("an expired file credential is discovered but marked unusable")
+    @Test("a locally expired credential remains usable until the provider rejects it")
     func expiredFileCredential() async throws {
         let context = try context(credential: "claude-credential-expired")
         let account = try #require(
             try await ClaudeProvider().discoverAccounts(using: context).first
         )
-        #expect(account.availability == .unavailable)
+        #expect(account.availability == .active)
     }
 
     @Test("an MCP-only credential document is a missing sign-in, not a malformed file")
@@ -276,39 +276,47 @@ struct ClaudeProviderTests {
 
     @Test("fetch parses the Keychain credential document inside the operation")
     func fetchesWithKeychainCredential() async throws {
-        let item = Self.keychainDescriptor(
-            root: ProviderFixtures.claudeRoot,
-            identifier: "persistent-claude"
-        )
-        let locator = CredentialLocator(
-            kind: .keychain,
-            identifier: item.1.locator.identifier,
-            path: ClaudeCredentialFile.secretPath
-        )
-        let credentials = SealedCredentialSource(
-            secrets: [locator: Self.accessToken],
-            documents: [
-                locator: try ProviderFixtures.data("Claude", "claude-credential-happy")
-            ],
-            slots: [item.0: [item.1]]
-        )
         let http = InMemoryHTTPTransport()
         http.stub(
             ClaudeProvider.usageURL,
             with: try ProviderFixtures.response("Claude", "claude-usage-happy")
         )
-        let context = try context(credential: nil, http: http, credentials: credentials)
-        let account = try #require(
-            try await ClaudeProvider().discoverAccounts(using: context).first
+        let setup = try await keychainAccount(
+            credential: "claude-credential-happy",
+            http: http
         )
 
-        let report = try await ClaudeProvider().fetchUsage(for: account, using: context)
+        let report = try await ClaudeProvider().fetchUsage(
+            for: setup.account,
+            using: setup.context
+        )
 
         #expect(
             http.recordedRequests.first?.headerValue("Authorization")
                 == "Bearer \(Self.accessToken)")
         #expect(report.plan == "Claude Max 20x")
-        #expect(credentials.resolvedLocators == [locator])
+        #expect(setup.credentials.resolvedLocators == [setup.locator])
+    }
+
+    @Test("a locally expired Keychain token is still offered to the provider")
+    func providerValidatesExpiredKeychainCredential() async throws {
+        let http = InMemoryHTTPTransport()
+        http.stub(
+            ClaudeProvider.usageURL,
+            with: try ProviderFixtures.response("Claude", "claude-usage-happy")
+        )
+        let setup = try await keychainAccount(
+            credential: "claude-credential-expired",
+            http: http
+        )
+
+        _ = try await ClaudeProvider().fetchUsage(
+            for: setup.account,
+            using: setup.context
+        )
+
+        #expect(http.recordedRequests.count == 1)
+        #expect(setup.credentials.resolvedLocators == [setup.locator])
     }
 
     // MARK: - Request construction
@@ -470,9 +478,13 @@ struct ClaudeProviderTests {
         #expect(error.retry?.scope == .account)
     }
 
-    @Test("an expired file credential is not sent to the network at all")
-    func skipsNetworkForExpiredCredential() async throws {
+    @Test("a local expiry timestamp does not override a successful provider response")
+    func providerDecidesWhetherCredentialIsExpired() async throws {
         let http = InMemoryHTTPTransport()
+        http.stub(
+            ClaudeProvider.usageURL,
+            with: try ProviderFixtures.response("Claude", "claude-usage-happy")
+        )
         let context = try context(
             credential: "claude-credential-expired",
             http: http,
@@ -482,15 +494,10 @@ struct ClaudeProviderTests {
             try await ClaudeProvider().discoverAccounts(using: context).first
         )
 
-        await #expect(
-            throws: UsageError(
-                category: .authenticationExpired,
-                reason: .credentialUnavailable(kind: .file)
-            )
-        ) {
-            _ = try await ClaudeProvider().fetchUsage(for: account, using: context)
-        }
-        #expect(http.recordedRequests.isEmpty)
+        let report = try await ClaudeProvider().fetchUsage(for: account, using: context)
+
+        #expect(!report.windows.isEmpty)
+        #expect(http.recordedRequests.count == 1)
     }
 
     // MARK: - No mutation, no UI
@@ -568,6 +575,36 @@ struct ClaudeProviderTests {
             try await ClaudeProvider().discoverAccounts(using: context).first
         )
         return (account, context)
+    }
+
+    private func keychainAccount(
+        credential fixture: String,
+        http: InMemoryHTTPTransport
+    ) async throws -> (
+        account: ProviderAccount,
+        context: ProviderContext,
+        credentials: SealedCredentialSource,
+        locator: CredentialLocator
+    ) {
+        let item = Self.keychainDescriptor(
+            root: ProviderFixtures.claudeRoot,
+            identifier: "persistent-claude"
+        )
+        let locator = CredentialLocator(
+            kind: .keychain,
+            identifier: item.1.locator.identifier,
+            path: ClaudeCredentialFile.secretPath
+        )
+        let credentials = SealedCredentialSource(
+            secrets: [locator: Self.accessToken],
+            documents: [locator: try ProviderFixtures.data("Claude", fixture)],
+            slots: [item.0: [item.1]]
+        )
+        let context = try context(credential: nil, http: http, credentials: credentials)
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(using: context).first
+        )
+        return (account, context, credentials, locator)
     }
 
     private func fetch(usage fixture: String) async throws -> UsageReport {

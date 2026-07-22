@@ -451,6 +451,13 @@ extension RefreshCoordinator {
                 clampDeadlines(ofProvider: key.providerID)
             }
         }
+        if error.category == .credentialUnavailable {
+            // A credential that was discovered and is suddenly unavailable usually means its
+            // keychain item was rotated out from under the cached locator — Claude Code rewrites
+            // its row on every token refresh. Retrying with the same locator cannot succeed, so
+            // the wave that retries this account must re-resolve credentials first.
+            nextDiscoveryAt = now
+        }
         states[key] = state
     }
 

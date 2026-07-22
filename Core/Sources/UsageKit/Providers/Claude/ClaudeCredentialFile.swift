@@ -2,21 +2,11 @@ import Foundation
 
 /// Non-secret facts from a Claude Code credential document.
 ///
-/// The same shape is stored in the Keychain item and in `~/.claude/.credentials.json`. The tokens
-/// are read while parsing and are not retained: only their presence is.
+/// The same shape is stored in the Keychain item and in `~/.claude/.credentials.json`. The access
+/// token is checked only for presence and is not retained.
 struct ClaudeCredentialMetadata: Sendable, Hashable {
-    let expiresAt: Date?
     let subscriptionType: String?
     let rateLimitTier: String?
-
-    /// Whether the stored token has lapsed.
-    ///
-    /// Fails closed: a credential with no stated expiry counts as expired, because the alternative
-    /// is issuing a request with a token we have no reason to believe in.
-    func isExpired(at now: Date) -> Bool {
-        guard let expiresAt else { return true }
-        return now >= expiresAt
-    }
 
     var planLabel: String? {
         ClaudePlanLabel.make(subscriptionType: subscriptionType, rateLimitTier: rateLimitTier)
@@ -70,7 +60,6 @@ enum ClaudeCredentialFile {
             throw UsageError.credentialUnavailable(kind: kind)
         }
         return ClaudeCredentialMetadata(
-            expiresAt: document.expiresAt,
             subscriptionType: document.subscriptionType,
             rateLimitTier: document.rateLimitTier
         )
@@ -78,7 +67,6 @@ enum ClaudeCredentialFile {
 
     private struct Document: Decodable {
         let hasAccessToken: Bool
-        let expiresAt: Date?
         let subscriptionType: String?
         let rateLimitTier: String?
 
@@ -86,10 +74,6 @@ enum ClaudeCredentialFile {
             let root = try decoder.container(keyedBy: AnyCodingKey.self)
             let oauth = root.nested("claudeAiOauth")
             hasAccessToken = oauth?.trimmedString("accessToken") != nil
-            let milliseconds = oauth?.lenientDecimal("expiresAt")
-            expiresAt = ProviderDates.epochMilliseconds(
-                milliseconds.map { Double(truncating: $0 as NSDecimalNumber) }
-            )
             subscriptionType = oauth?.trimmedString("subscriptionType")
             rateLimitTier = oauth?.trimmedString("rateLimitTier")
         }

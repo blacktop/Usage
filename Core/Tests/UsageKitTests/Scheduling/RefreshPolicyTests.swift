@@ -53,12 +53,12 @@ struct RefreshPolicyTests {
     /// Guards the Phase 0 gate. A popover-present cadence needs `MenuBarExtra` appearance callbacks
     /// to pair reliably, and the results table in docs/menu-bar-lifecycle.md is still empty. Adding
     /// a second cadence before that table is filled in turns this red.
-    @Test("Base cadence does not vary with anything but consecutive failures")
+    @Test("Base cadence does not vary with anything outside the refresh input")
     func cadenceHasNoUnmeasuredInputs() {
         let quiet = RefreshPolicy.nextDelay(for: input("same-account"))
         let repeated = RefreshPolicy.nextDelay(for: input("same-account"))
         #expect(quiet == repeated, "the policy is pure, so equal inputs give equal delays")
-        expectWithinJitter(quiet, of: RefreshPolicy.idleInterval, "only one base cadence exists")
+        expectWithinJitter(quiet, of: RefreshPolicy.idleInterval, "one provider-facing cadence")
     }
 
     @Test("Consecutive failures back off exponentially and stop at the ceiling")
@@ -80,6 +80,36 @@ struct RefreshPolicyTests {
         }
         let capped = RefreshPolicy.nextDelay(for: input(outcome: failure, failures: 40))
         expectWithinJitter(capped, of: RefreshPolicy.backoffCeiling, "backoff stops at 30 minutes")
+    }
+
+    @Test("A failed credential read retries on the short recovery cadence, not the provider one")
+    func credentialFailureRecoversQuickly() {
+        let locked = UsageError.interactionForbidden()
+        let missing = UsageError.credentialUnavailable(kind: .keychain)
+        for error in [locked, missing] {
+            expectWithinJitter(
+                RefreshPolicy.nextDelay(for: input(outcome: .failure(error), failures: 1)),
+                of: RefreshPolicy.credentialRecoveryInterval,
+                "a local credential failure costs no provider request and retries fast"
+            )
+        }
+    }
+
+    @Test("Credential recovery still backs off exponentially and shares the ceiling")
+    func credentialRecoveryStillBacksOff() {
+        let failure = AccountRefreshInput.Outcome.failure(.credentialUnavailable(kind: .keychain))
+        for count in 1...4 {
+            expectWithinJitter(
+                RefreshPolicy.nextDelay(for: input(outcome: failure, failures: count)),
+                of: min(
+                    RefreshPolicy.credentialRecoveryInterval * (1 << (count - 1)),
+                    RefreshPolicy.backoffCeiling
+                ),
+                "credential failure \(count) doubles the short cadence"
+            )
+        }
+        let capped = RefreshPolicy.nextDelay(for: input(outcome: failure, failures: 40))
+        expectWithinJitter(capped, of: RefreshPolicy.backoffCeiling, "the ceiling is shared")
     }
 
     @Test("A Retry-After longer than the cadence is honoured verbatim")

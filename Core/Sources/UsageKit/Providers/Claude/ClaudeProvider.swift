@@ -1,10 +1,11 @@
 import Foundation
 
-/// Claude / Claude Code, read through the `.credentials.json` below each configured root.
+/// Claude / Claude Code, read through each configured root's credential file or Keychain item.
 ///
 /// Read-only: Usage never refreshes the OAuth token, never writes the credential file, and never
-/// launches the `claude` binary to make it refresh on our behalf. An expired credential surfaces
-/// `.authenticationExpired`, and the user runs `claude login` themselves.
+/// launches the `claude` binary to make it refresh on our behalf. The provider is authoritative
+/// about expiry: Claude Code continues presenting credentials whose local timestamp has passed,
+/// so Usage does the same and treats an HTTP 401 or 403 as the authentication decision.
 public struct ClaudeProvider: Provider {
     public static let id = ProviderID("claude")
 
@@ -62,12 +63,6 @@ public struct ClaudeProvider: Provider {
                     (data: Data) throws(UsageError) -> ClaudeCredentialMetadata in
                     try ClaudeCredentialFile.parse(data, kind: account.locator.kind)
                 } ?? Self.fileMetadata(for: account, using: context)
-            if let metadata, metadata.isExpired(at: context.clock.now) {
-                throw UsageError(
-                    category: .authenticationExpired,
-                    reason: .credentialUnavailable(kind: account.locator.kind)
-                )
-            }
             let response = try await context.http.send(
                 credential.authorizing(Self.usageRequest(), with: .bearer)
             )
@@ -116,8 +111,7 @@ public struct ClaudeProvider: Provider {
         else { return nil }
         let slot = Self.slot(for: root.directory)
         let path = url.standardizedFileURL.path(percentEncoded: false)
-        let metadata = try? ClaudeCredentialFile.parse(data, kind: .file)
-        let expired = metadata?.isExpired(at: context.clock.now) ?? true
+        let hasUsableCredential = (try? ClaudeCredentialFile.parse(data, kind: .file)) != nil
         return ProviderAccount(
             key: AccountKey(providerID: id, accountID: .credentialSlot(provider: id, slot: slot)),
             slot: slot,
@@ -128,7 +122,7 @@ public struct ClaudeProvider: Provider {
             ),
             profileRootID: root.id,
             displayName: root.label,
-            availability: expired ? .unavailable : .active
+            availability: hasUsableCredential ? .active : .unavailable
         )
     }
 
@@ -177,13 +171,11 @@ public struct ClaudeProvider: Provider {
         return descriptors.first { $0.displayName == userName }
     }
 
-    /// Metadata for the account's credential document, which is where the plan label and the local
-    /// expiry check come from.
+    /// Metadata for the account's credential document, which is where the plan label comes from.
     ///
     /// Only reached when the credential source handed back no document — the production file source
     /// always does, so this costs nothing on the shipped path. Read fresh rather than cached at
-    /// discovery, because Claude Code rewrites the document whenever it refreshes and a cached
-    /// expiry would reject a credential that has since been renewed.
+    /// discovery because Claude Code can rewrite the document between discovery and fetch.
     private static func fileMetadata(
         for account: ProviderAccount,
         using context: ProviderContext

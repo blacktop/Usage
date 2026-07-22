@@ -54,6 +54,7 @@ enum PopoverOverviewLayout {
 
 struct PopoverAccountList: View {
     let sections: [PopoverAccountSection]
+    let glass: LiquidGlassStyle
     let onRetry: (AccountKey, Bool) -> Void
 
     @State private var measuredContentHeight = PopoverOverviewLayout.maximumAccountAreaHeight
@@ -68,9 +69,17 @@ struct PopoverAccountList: View {
                 )
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(sections) { section in
-                            ProviderUsageCard(section: section, onRetry: onRetry)
+                    // Spacing zero: grouped for rendering, but full-width cards must never melt
+                    // into each other — metaball necks between stacked rectangles look broken.
+                    GlassEffectContainer(spacing: 0) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(sections) { section in
+                                ProviderUsageCard(
+                                    section: section,
+                                    glass: glass,
+                                    onRetry: onRetry
+                                )
+                            }
                         }
                     }
                     .padding(.bottom, 2)
