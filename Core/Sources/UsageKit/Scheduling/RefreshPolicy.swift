@@ -15,10 +15,10 @@ public enum RefreshPolicy {
     /// The one provider-facing cadence, until the lifecycle spike says a second one can be
     /// trusted.
     public static let idleInterval = Duration.seconds(300)
-    /// Base cadence for retrying a failure that never produced a provider request: a credential
-    /// that could not be read because the keychain was locked or its item was rotated out from
-    /// under the cached locator. Local and free to retry, so recovery is fast; the doubling and
-    /// the ceiling still apply.
+    /// Base cadence for retrying a credential that vanished from under its cached locator — an
+    /// agent rotating its Keychain item on token refresh. The retry costs no provider request and
+    /// the rediscovery beside it is what repairs the locator, so recovery is fast; the doubling
+    /// and the ceiling still apply.
     public static let credentialRecoveryInterval = Duration.seconds(30)
     /// Upper bound on failure backoff.
     public static let backoffCeiling = Duration.seconds(1_800)
@@ -38,9 +38,19 @@ public enum RefreshPolicy {
     /// The delay from `input.now` until this account's next refresh.
     ///
     /// Always positive. Never shorter than an active `Retry-After`, whatever else applies.
+    ///
+    /// The reset wake may pull a failure-stretched backoff forward, but never below the idle
+    /// cadence: no fetch that costs a provider request happens sooner than five minutes after the
+    /// previous attempt. Claude's usage endpoint rate-limits aggressively with no usable
+    /// `Retry-After` (anthropics/claude-code#31637, #30930), so the floor is a hard property of
+    /// the schedule rather than a per-provider courtesy. Credential-recovery retries stay exempt:
+    /// they fail before any HTTP request exists.
     public static func nextDelay(for input: AccountRefreshInput) -> Duration {
         let cadence = cadence(for: input)
-        let shortened = min(cadence, resetWake(for: input) ?? cadence)
+        var shortened = min(cadence, resetWake(for: input) ?? cadence)
+        if !input.isCredentialRecovery {
+            shortened = max(shortened, idleInterval)
+        }
         let honoured = max(shortened, input.retryAdvice?.delay ?? .zero)
         return max(minimumDelay, honoured + jitter(for: input.key, of: honoured))
     }

@@ -208,9 +208,51 @@ struct RefreshCoordinatorTests {
         let unrelated = try #require(await coordinator.deadline(for: healthy.key("c")))
         #expect(unrelated < cooldown)
 
+        clock.advance(by: RefreshPolicy.idleInterval + .seconds(1))
         await coordinator.refresh()
         #expect(limited.fetchCount("b") == 1, "a cooling provider is not refetched")
         #expect(healthy.fetchCount("c") == 2, "an unrelated provider still refreshes")
+        await coordinator.suspend()
+    }
+
+    @Test("A hand on the refresh button cannot undercut the five-minute floor")
+    func manualRefreshRespectsTheFloor() async throws {
+        let clock = GatedClock()
+        let provider = StubProvider(accountIDs: ["a"])
+        let coordinator = coordinator([provider], clock: clock, sink: EventLog())
+
+        await coordinator.refresh()
+        #expect(provider.fetchCount("a") == 1, "the first fetch is free: nothing was attempted")
+
+        await coordinator.refresh()
+        await coordinator.refresh()
+        #expect(
+            provider.fetchCount("a") == 1,
+            "repeated manual refreshes inside the floor send no request at all"
+        )
+
+        clock.advance(by: RefreshPolicy.idleInterval + .seconds(1))
+        await coordinator.refresh()
+        #expect(provider.fetchCount("a") == 2, "past the floor the manual refresh fetches again")
+        await coordinator.suspend()
+    }
+
+    @Test("A manual refresh retries a request-free failure immediately")
+    func manualRefreshRetriesLocalFailuresImmediately() async throws {
+        let clock = GatedClock()
+        let provider = StubProvider(accountIDs: ["a"])
+        provider.fail("a", with: .credentialUnavailable(kind: .keychain))
+        let coordinator = coordinator([provider], clock: clock, sink: EventLog())
+
+        await coordinator.refresh()
+        #expect(provider.fetchCount("a") == 1)
+
+        await coordinator.refresh()
+
+        #expect(
+            provider.fetchCount("a") == 2,
+            "a vanished-credential retry costs no provider request, so the floor does not apply"
+        )
         await coordinator.suspend()
     }
 
@@ -224,6 +266,7 @@ struct RefreshCoordinatorTests {
         await coordinator.refresh()
         let cooldown = try #require(await coordinator.cooldown(for: provider.key("b")))
 
+        clock.advance(by: RefreshPolicy.idleInterval + .seconds(1))
         await coordinator.refresh()
 
         #expect(provider.fetchCount("b") == 1, "the rate-limited account is still cooling")
@@ -264,6 +307,7 @@ struct RefreshCoordinatorTests {
         let first = try #require(await coordinator.deadline(for: provider.key("a")))
         #expect(await coordinator.consecutiveFailures(for: provider.key("a")) == 1)
 
+        clock.advance(by: RefreshPolicy.idleInterval + .seconds(1))
         await coordinator.refresh()
 
         #expect(await coordinator.consecutiveFailures(for: provider.key("a")) == 2)
@@ -322,8 +366,8 @@ struct RefreshCoordinatorTests {
         await coordinator.suspend()
     }
 
-    @Test("A window's reset time pulls the next wake in ahead of the idle cadence")
-    func futureResetDrivesTheTimer() async throws {
+    @Test("A near reset cannot schedule a fetch inside the five-minute floor")
+    func futureResetRespectsTheFloor() async throws {
         let clock = GatedClock()
         let provider = StubProvider(accountIDs: ["a"])
         provider.setReset("a", at: clock.now.addingTimeInterval(90))
@@ -332,8 +376,10 @@ struct RefreshCoordinatorTests {
         await coordinator.refresh()
 
         let requested = await clock.nextSleep()
-        #expect(requested >= .seconds(120))
-        #expect(requested < RefreshPolicy.idleInterval)
+        #expect(
+            requested >= RefreshPolicy.idleInterval,
+            "the floor outranks the reset wake: no request sooner than five minutes"
+        )
         await coordinator.suspend()
     }
 
@@ -417,6 +463,7 @@ struct RefreshCoordinatorTests {
         let deadline = try #require(await coordinator.deadline(for: provider.key("a")))
 
         provider.failDiscovery(with: .credentialUnavailable(kind: .file))
+        clock.advance(by: RefreshPolicy.idleInterval + .seconds(1))
         await coordinator.refresh()
 
         #expect(await log.discoveryFailures(for: provider.providerID).count == 1)
@@ -607,6 +654,30 @@ struct RefreshCoordinatorTests {
         #expect(
             provider.discoveryCount == 2,
             "the retry re-resolved the stale locator before fetching"
+        )
+        await coordinator.suspend()
+    }
+
+    @Test(
+        "An expired authentication forces rediscovery on its retry wave",
+        .timeLimit(.minutes(1))
+    )
+    func authenticationFailureForcesRediscovery() async throws {
+        let clock = GatedClock()
+        let provider = StubProvider(accountIDs: ["a"])
+        provider.fail("a", with: UsageError.from(HTTPResponse(status: 401)))
+        let coordinator = coordinator([provider], clock: clock, sink: EventLog())
+
+        await coordinator.refresh()
+        #expect(provider.discoveryCount == 1)
+
+        _ = await clock.nextSleep()
+        clock.fireOldestSleep()
+        while provider.fetchCount("a") < 2 { await Task.yield() }
+
+        #expect(
+            provider.discoveryCount == 2,
+            "a 401 means the token rotated or a new source appeared; the retry re-resolves first"
         )
         await coordinator.suspend()
     }

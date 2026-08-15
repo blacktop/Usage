@@ -41,12 +41,16 @@ struct ProviderUsageCard: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             ProviderCardHeader(
                 title: section.displayName,
                 accountCount: presentation.discoveredAccountCount
             )
-            ProviderAccountLegend(accounts: presentation.accounts)
+            // A single account's tint dot restates nothing the meters don't already carry, so
+            // the legend earns its rows only when there is more than one account to tell apart.
+            if presentation.accounts.count > 1 {
+                ProviderAccountLegend(accounts: presentation.accounts)
+            }
             ProviderMetricList(groups: presentation.windowGroups)
             if !presentation.credits.isEmpty {
                 ProviderCreditsGroup(credits: presentation.credits)
@@ -54,7 +58,7 @@ struct ProviderUsageCard: View {
             ProviderAccountIssues(accounts: presentation.accounts, onRetry: onRetry)
             ProviderFreshness(presentation: presentation)
         }
-        .padding(12)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("provider-card-\(section.id.rawValue)")
     }
@@ -80,13 +84,8 @@ private struct ProviderCardHeader: View {
 private struct ProviderAccountLegend: View {
     let accounts: [ProviderUsagePresentation.Account]
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 12, alignment: .leading),
-        GridItem(.flexible(), alignment: .leading),
-    ]
-
     var body: some View {
-        LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             ForEach(accounts) { account in
                 ProviderLegendItem(account: account)
             }
@@ -100,26 +99,23 @@ private struct ProviderLegendItem: View {
     let account: ProviderUsagePresentation.Account
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(AccountTint.color(at: account.colorIndex))
-                    .frame(width: 7, height: 7)
-                    .accessibilityHidden(true)
-                Text(account.label)
-                    .font(.caption.weight(.medium))
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                Spacer(minLength: 2)
-                AccountRefreshMark(state: account.state)
-            }
+        HStack(spacing: 6) {
+            Circle()
+                .fill(AccountTint.color(at: account.colorIndex))
+                .frame(width: 7, height: 7)
+                .accessibilityHidden(true)
+            Text(account.label)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .layoutPriority(1)
             if let plan = account.plan {
                 Text(plan)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
-                    .padding(.leading, 13)
             }
+            Spacer(minLength: 2)
+            AccountRefreshMark(state: account.state)
         }
         .accessibilityElement(children: .combine)
         .help(account.label)

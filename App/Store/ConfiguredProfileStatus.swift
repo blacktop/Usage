@@ -23,6 +23,33 @@ enum ProviderCredentialDocuments {
         }
     }
 
+    static func status(
+        providerID: ProviderID,
+        hasCredentialDocument: Bool,
+        hasSetupToken: Bool = false
+    ) -> String {
+        guard providerID == ClaudeProvider.id else {
+            return hasCredentialDocument
+                ? "Sign-in file found"
+                : "No sign-in file in this folder"
+        }
+        if hasSetupToken {
+            return "Setup token saved; Claude Code Keychain is preferred"
+        }
+        return hasCredentialDocument
+            ? "Credential JSON found"
+            : "Claude Code Keychain checked during refresh"
+    }
+
+    static func guidance(for providerID: ProviderID) -> String? {
+        guard providerID == ClaudeProvider.id else { return nil }
+        return
+            "Usage tries .credentials.json first, then Claude Code’s root-specific Keychain "
+            + "item, then a setup token saved with the key button. A setup token remains unused "
+            + "while either earlier source is usable; create one with claude setup-token only as "
+            + "a fallback."
+    }
+
     static func exists(
         below profile: ProfileRoot,
         using fileSystem: any ProviderFileSystem

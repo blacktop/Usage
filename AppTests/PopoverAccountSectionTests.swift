@@ -9,7 +9,7 @@ import UsageKit
 struct PopoverAccountSectionTests {
     @Test("The overview keeps one-column dimensions and caps only oversized content")
     func overviewUsesOneColumnDimensions() {
-        #expect(PopoverOverviewLayout.width == 620)
+        #expect(PopoverOverviewLayout.width == 340)
         #expect(PopoverOverviewLayout.maximumAccountAreaHeight >= 900)
         #expect(PopoverOverviewLayout.accountAreaHeight(measuredContentHeight: 480) == 480)
         #expect(

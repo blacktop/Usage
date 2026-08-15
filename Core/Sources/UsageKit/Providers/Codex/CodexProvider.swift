@@ -27,11 +27,13 @@ public struct CodexProvider: Provider {
     /// Codex's direct Keychain backend stores the same serialized `auth.json` document under
     /// service `Codex Auth`; its account attribute is a SHA-256-derived identity for `CODEX_HOME`.
     /// That makes lookup root-scoped rather than a host-wide fallback. Enumeration is attributes
-    /// only and file authentication keeps precedence when both exist.
+    /// only and a *usable* file keeps precedence: a file that exists but carries no OAuth tokens is
+    /// not authentication, so the root's Keychain row is still consulted before that file is
+    /// reported as the account's unavailable source.
     public func discoverAccounts(using context: ProviderContext) async throws -> [ProviderAccount] {
         let roots = try await context.enabledProfileRoots(for: Self.id)
         let fileAccounts = roots.map { Self.fileAccount(in: $0, using: context) }
-        guard fileAccounts.contains(where: { $0 == nil }) else {
+        guard fileAccounts.contains(where: { $0?.availability != .active }) else {
             return fileAccounts.compactMap { $0 }
         }
 
@@ -39,13 +41,13 @@ public struct CodexProvider: Provider {
             kind: .keychain, identifier: CodexAuthFile.keychainService)
         let keychainSlots = (try? await context.credentials.slots(in: namespace)) ?? []
         return zip(roots, fileAccounts).compactMap { root, fileAccount in
-            if let fileAccount { return fileAccount }
+            if let fileAccount, fileAccount.availability == .active { return fileAccount }
             let expectedAccount = CodexAuthFile.keychainAccount(root: root.directory)
             guard
                 let descriptor = keychainSlots.first(where: {
                     $0.slot.opaqueID == expectedAccount
                 })
-            else { return nil }
+            else { return fileAccount }
             return Self.keychainAccount(descriptor: descriptor, root: root)
         }
     }

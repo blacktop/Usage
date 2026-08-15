@@ -15,6 +15,7 @@ enum ClaudeUsageMapper {
     ) throws(UsageError) -> UsageReport {
         var collector = WindowCollector()
         appendPlanWindows(response, into: &collector)
+        appendPlanWindowsFromLimits(response.limits, into: &collector)
         appendModelWindows(response, into: &collector)
         appendScopedWeeklyWindows(response.limits, into: &collector)
         let credits = creditBalance(response.extraUsage)
@@ -55,6 +56,46 @@ enum ClaudeUsageMapper {
         )
     }
 
+    /// Emits the plan windows from the newer `limits` array when the flat members are absent.
+    ///
+    /// Newer accounts ship `five_hour`/`seven_day` as null and carry the same values as `session`
+    /// and `weekly_all` entries. The collector's first-wins rule keeps the flat members
+    /// authoritative when both forms arrive, so this can never double-count a window.
+    private static func appendPlanWindowsFromLimits(
+        _ entries: [ClaudeLimitEntry],
+        into collector: inout WindowCollector
+    ) {
+        for entry in entries {
+            guard let percent = entry.percent, percent.isFinite else { continue }
+            switch entry.kind {
+            case "session":
+                collector.add(
+                    try? UsageWindow(
+                        id: WindowID(scope: .plan, slot: .primary, period: .session),
+                        kind: .session,
+                        label: "Session",
+                        usedFraction: percent / 100,
+                        resetsAt: entry.resetsAt,
+                        duration: .seconds(5 * 3_600)
+                    )
+                )
+            case "weekly_all":
+                collector.add(
+                    try? UsageWindow(
+                        id: WindowID(scope: .plan, slot: .secondary, period: .weekly),
+                        kind: .weekly,
+                        label: "Weekly",
+                        usedFraction: percent / 100,
+                        resetsAt: entry.resetsAt,
+                        duration: .seconds(7 * 86_400)
+                    )
+                )
+            default:
+                continue
+            }
+        }
+    }
+
     private static func appendModelWindows(
         _ response: ClaudeUsageResponse,
         into collector: inout WindowCollector
@@ -92,7 +133,7 @@ enum ClaudeUsageMapper {
     ) {
         for entry in entries where entry.group == "weekly" && entry.kind == "weekly_scoped" {
             guard let percent = entry.percent, percent.isFinite,
-                let label = entry.modelDisplayName,
+                let label = entry.modelDisplayName ?? entry.modelID,
                 let feature = FeatureSlug.make(entry.modelID ?? label),
                 !isAllModels(feature)
             else { continue }

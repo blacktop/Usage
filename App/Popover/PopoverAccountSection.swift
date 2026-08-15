@@ -44,7 +44,9 @@ struct PopoverAccountSection: Identifiable {
 }
 
 enum PopoverOverviewLayout {
-    static let width: CGFloat = 620
+    /// One compact column. The 620-point width was a leftover of the removed three-column
+    /// formula, not a measured requirement.
+    static let width: CGFloat = 340
     static let maximumAccountAreaHeight: CGFloat = 900
 
     static func accountAreaHeight(measuredContentHeight: CGFloat) -> CGFloat {

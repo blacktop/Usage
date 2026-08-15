@@ -109,22 +109,29 @@ private final class RediscoveryRecorder {
 private struct Harness {
     let store: StubProfileRootStore
     let files: InMemoryFileSystem
+    let managedCredentials: InMemoryManagedCredentialStore
     let reveal: RevealRecorder
     let rediscovery: RediscoveryRecorder
     let settings: ProfileSettingsModel
 
-    init(collection: ProfileRootCollection, files: InMemoryFileSystem = InMemoryFileSystem()) {
+    init(
+        collection: ProfileRootCollection,
+        files: InMemoryFileSystem = InMemoryFileSystem(),
+        managedCredentials: InMemoryManagedCredentialStore = InMemoryManagedCredentialStore()
+    ) {
         let store = StubProfileRootStore(collection: collection)
         let reveal = RevealRecorder()
         let rediscovery = RediscoveryRecorder()
         self.store = store
         self.files = files
+        self.managedCredentials = managedCredentials
         self.reveal = reveal
         self.rediscovery = rediscovery
         settings = ProfileSettingsModel(
             store: store,
             registry: .agents,
             fileSystem: files,
+            managedCredentials: managedCredentials,
             reveal: { reveal.record($0) },
             rediscover: { rediscovery.record() }
         )
@@ -426,6 +433,125 @@ struct ProfileSettingsModelTests {
                 == ["apps.json", "hosts.json", "oauth.json"]
         )
         #expect(ProviderCredentialDocuments.names(for: ProviderID("gemini")).isEmpty)
+    }
+
+    @Test("Claude explains its actual credential precedence")
+    func claudeCredentialGuidanceIsAccurate() throws {
+        #expect(
+            ProviderCredentialDocuments.status(
+                providerID: claude,
+                hasCredentialDocument: true
+            ) == "Credential JSON found"
+        )
+        #expect(
+            ProviderCredentialDocuments.status(
+                providerID: claude,
+                hasCredentialDocument: false
+            ) == "Claude Code Keychain checked during refresh"
+        )
+        #expect(
+            ProviderCredentialDocuments.status(
+                providerID: claude,
+                hasCredentialDocument: false,
+                hasSetupToken: true
+            ) == "Setup token saved; Claude Code Keychain is preferred"
+        )
+        let guidance = try #require(ProviderCredentialDocuments.guidance(for: claude))
+        #expect(guidance.contains(".credentials.json first"))
+        #expect(guidance.contains("Claude Code’s root-specific Keychain"))
+        #expect(guidance.contains("setup token remains unused"))
+        #expect(guidance.contains("claude setup-token"))
+        #expect(ProviderCredentialDocuments.guidance(for: ProviderID("codex")) == nil)
+    }
+
+    @Test("A Claude setup token is stored against only its profile root")
+    func storesSetupTokenPerRoot() async throws {
+        let harness = Harness(
+            collection: try collection([
+                "/Users/fixture/profiles/personal",
+                "/Users/fixture/profiles/work",
+            ])
+        )
+        await harness.settings.load()
+        let rows = harness.rows("claude")
+        let personal = try #require(rows.first)
+        let work = try #require(rows.last)
+
+        #expect(harness.settings.saveClaudeSetupToken("sk-ant-oat01-fixture", for: work.id))
+        await harness.settings.quiesce()
+
+        let updatedRows = harness.rows("claude")
+        let updatedPersonal = try #require(updatedRows.first)
+        let updatedWork = try #require(updatedRows.last)
+        #expect(!updatedPersonal.hasSetupToken)
+        #expect(updatedWork.hasSetupToken)
+        #expect(
+            harness.managedCredentials.containsCredential(
+                at: ClaudeSetupTokenCredential.locator(for: work.id)
+            )
+        )
+        #expect(
+            !harness.managedCredentials.containsCredential(
+                at: ClaudeSetupTokenCredential.locator(for: personal.id)
+            )
+        )
+        #expect(harness.managedCredentials.storageCount == 1)
+        #expect(harness.rediscovery.count == 1)
+        #expect(await harness.store.saveCount == 0, "tokens never enter profile preferences")
+    }
+
+    @Test("Removing a Claude root also removes its Usage-owned setup token")
+    func removingRootRemovesSetupToken() async throws {
+        let stored = try collection(["/Users/fixture/profiles/work"])
+        let id = try #require(stored.profiles.first).id
+        let tokenStore = InMemoryManagedCredentialStore(
+            locators: [ClaudeSetupTokenCredential.locator(for: id)]
+        )
+        let harness = Harness(collection: stored, managedCredentials: tokenStore)
+        await harness.settings.load()
+        #expect(try #require(harness.rows("claude").first).hasSetupToken)
+
+        await harness.settings.removeRoot(id)
+        await harness.settings.quiesce()
+
+        #expect(harness.rows("claude").isEmpty)
+        #expect(
+            !tokenStore.containsCredential(
+                at: ClaudeSetupTokenCredential.locator(for: id)
+            )
+        )
+        #expect(tokenStore.removalCount == 1)
+    }
+
+    @Test("A failed Claude token cleanup leaves the same root available for retry")
+    func failedTokenCleanupKeepsRootRetryable() async throws {
+        let stored = try collection(["/Users/fixture/profiles/work"])
+        let id = try #require(stored.profiles.first).id
+        let locator = ClaudeSetupTokenCredential.locator(for: id)
+        let tokenStore = InMemoryManagedCredentialStore(
+            locators: [locator],
+            removalFailure: .storageUnavailable
+        )
+        let harness = Harness(collection: stored, managedCredentials: tokenStore)
+        await harness.settings.load()
+
+        await harness.settings.removeRoot(id)
+        await harness.settings.quiesce()
+
+        #expect(harness.rows("claude").map(\.id) == [id])
+        #expect(tokenStore.containsCredential(at: locator))
+        #expect(await harness.store.saveCount == 0)
+        #expect(harness.rediscovery.count == 0)
+        #expect(harness.settings.errorMessage?.contains("Usage Keychain") == true)
+
+        tokenStore.setRemovalFailure(nil)
+        await harness.settings.removeRoot(id)
+        await harness.settings.quiesce()
+
+        #expect(harness.rows("claude").isEmpty)
+        #expect(!tokenStore.containsCredential(at: locator))
+        #expect(await harness.store.saveCount == 1)
+        #expect(harness.rediscovery.count == 1)
     }
 
     @Test("Reveal hands the root's own directory to the injected action and opens nothing")

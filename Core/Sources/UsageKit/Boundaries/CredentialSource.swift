@@ -8,12 +8,14 @@ public struct CredentialLocator: Sendable, Hashable {
     public enum Kind: String, Sendable, Hashable, Codable, CaseIterable {
         case file
         case keychain
+        case appKeychain
         case githubCLI
 
         var noun: String {
             switch self {
             case .file: "file system"
             case .keychain: "keychain"
+            case .appKeychain: "Usage keychain"
             case .githubCLI: "GitHub CLI"
             }
         }

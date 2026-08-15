@@ -7,8 +7,13 @@ import Security
 ///
 /// Two markers, because neither is sufficient alone on macOS. `LAContext.interactionNotAllowed`
 /// covers the modern authentication path, and the legacy `kSecUseAuthenticationUI` fail policy
-/// covers the file-based login keychain, whose Allow/Deny dialog predates `LAContext` and still
-/// appears without it.
+/// covers the data-protection keychain.
+///
+/// Neither marker stops the *file-based* login keychain's Allow/Deny dialog, which is where every
+/// agent credential Usage reads actually lives — measured 2026-07-24, when a scheduled refresh
+/// raised a panel nobody asked for. Suppressing that one takes process state rather than a query
+/// attribute, so it lives in `KeychainUserInteraction` and is applied by the caller alongside
+/// these markers.
 ///
 /// The legacy constant is deprecated, and this package builds with warnings as errors, so its value
 /// is resolved from the Security framework at runtime instead of referenced at compile time. A

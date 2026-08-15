@@ -5,6 +5,7 @@
 public struct SystemCredentialSource: CredentialSource {
     private let files: FileCredentialSource
     private let keychain: KeychainCredentialSource
+    private let appKeychain: AppKeychainCredentialStore
     private let githubCLI: GitHubCLICredentialSource
 
     public init(
@@ -13,6 +14,7 @@ public struct SystemCredentialSource: CredentialSource {
     ) {
         files = FileCredentialSource(fileSystem: fileSystem)
         keychain = KeychainCredentialSource(interaction: interaction)
+        appKeychain = AppKeychainCredentialStore(interaction: interaction)
         githubCLI = GitHubCLICredentialSource()
     }
 
@@ -23,6 +25,8 @@ public struct SystemCredentialSource: CredentialSource {
         switch locator.kind {
         case .file: try await files.withCredential(at: locator, perform: operation)
         case .keychain: try await keychain.withCredential(at: locator, perform: operation)
+        case .appKeychain:
+            try await appKeychain.withCredential(at: locator, perform: operation)
         case .githubCLI: try await githubCLI.withCredential(at: locator, perform: operation)
         }
     }
@@ -31,6 +35,7 @@ public struct SystemCredentialSource: CredentialSource {
         switch namespace.kind {
         case .file: []
         case .keychain: try await keychain.slots(in: namespace)
+        case .appKeychain: try await appKeychain.slots(in: namespace)
         case .githubCLI: []
         }
     }

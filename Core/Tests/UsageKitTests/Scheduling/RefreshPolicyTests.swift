@@ -82,17 +82,27 @@ struct RefreshPolicyTests {
         expectWithinJitter(capped, of: RefreshPolicy.backoffCeiling, "backoff stops at 30 minutes")
     }
 
-    @Test("A failed credential read retries on the short recovery cadence, not the provider one")
+    @Test("A vanished credential retries on the short recovery cadence, not the provider one")
     func credentialFailureRecoversQuickly() {
-        let locked = UsageError.interactionForbidden()
         let missing = UsageError.credentialUnavailable(kind: .keychain)
-        for error in [locked, missing] {
-            expectWithinJitter(
-                RefreshPolicy.nextDelay(for: input(outcome: .failure(error), failures: 1)),
-                of: RefreshPolicy.credentialRecoveryInterval,
-                "a local credential failure costs no provider request and retries fast"
-            )
-        }
+        expectWithinJitter(
+            RefreshPolicy.nextDelay(for: input(outcome: .failure(missing), failures: 1)),
+            of: RefreshPolicy.credentialRecoveryInterval,
+            "a rotated Keychain item is repaired by the rediscovery beside the retry"
+        )
+    }
+
+    /// The recovery for this failure is the user's explicit approval, and a scheduled retry runs
+    /// under the same no-UI policy that just refused the read. Putting it on the fast cadence
+    /// would spend Keychain reads on an outcome that cannot change until the user acts.
+    @Test("A credential awaiting approval keeps the ordinary cadence")
+    func approvalFailureDoesNotRetryFast() {
+        let locked = UsageError.interactionForbidden()
+        expectWithinJitter(
+            RefreshPolicy.nextDelay(for: input(outcome: .failure(locked), failures: 1)),
+            of: RefreshPolicy.idleInterval,
+            "only the user can clear an approval-gated read"
+        )
     }
 
     @Test("Credential recovery still backs off exponentially and shares the ceiling")
@@ -151,8 +161,8 @@ struct RefreshPolicyTests {
         #expect(delay >= .seconds(600))
     }
 
-    @Test("The nearest future reset pulls the next refresh just past it")
-    func futureResetShortensTheDelay() {
+    @Test("A reset sooner than the floor cannot schedule a fetch inside five minutes")
+    func futureResetNeverUndercutsTheFloor() {
         let delay = RefreshPolicy.nextDelay(
             for: input(
                 resets: [
@@ -162,7 +172,80 @@ struct RefreshPolicyTests {
                 ]
             )
         )
-        expectWithinJitter(delay, of: .seconds(150), "wake 30s after the nearest reset")
+        expectWithinJitter(
+            delay,
+            of: RefreshPolicy.idleInterval,
+            "the five-minute floor outranks a nearby reset"
+        )
+    }
+
+    @Test("A reset wake pulls a failure-stretched backoff down to the floor, never below it")
+    func futureResetShortensBackoffToTheFloor() {
+        let failed = UsageError.from(HTTPResponse(status: 500))
+        let backedOff = RefreshPolicy.nextDelay(
+            for: input(outcome: .failure(failed), failures: 3)
+        )
+        #expect(
+            backedOff >= RefreshPolicy.idleInterval * 4,
+            "three failures back the cadence off to at least 20 minutes"
+        )
+
+        let pulled = RefreshPolicy.nextDelay(
+            for: input(
+                outcome: .failure(failed),
+                failures: 3,
+                resets: [now.addingTimeInterval(120)]
+            )
+        )
+        expectWithinJitter(
+            pulled,
+            of: RefreshPolicy.idleInterval,
+            "the reset wake shortens the backoff, and the floor catches it"
+        )
+    }
+
+    @Test("Credential recovery stays exempt from the floor: it costs no provider request")
+    func credentialRecoveryStaysBelowTheFloor() {
+        let vanished = UsageError.credentialUnavailable(kind: .keychain)
+        let delay = RefreshPolicy.nextDelay(
+            for: input(outcome: .failure(vanished), failures: 1)
+        )
+        expectWithinJitter(
+            delay,
+            of: RefreshPolicy.credentialRecoveryInterval,
+            "a local read retries on the 30-second recovery cadence"
+        )
+    }
+
+    @Test(
+        "A 429 without Retry-After backs off from the floor to the ceiling",
+        arguments: [(1, 300), (2, 600), (3, 1_200), (4, 1_800), (9, 1_800)]
+    )
+    func rateLimitedBackoffWithoutRetryAfter(failures: Int, expectedSeconds: Int) {
+        let rateLimited = UsageError.from(HTTPResponse(status: 429))
+        #expect(rateLimited.retry == nil, "no Retry-After header means no advice")
+        let delay = RefreshPolicy.nextDelay(
+            for: input(outcome: .failure(rateLimited), failures: failures)
+        )
+        expectWithinJitter(
+            delay,
+            of: .seconds(expectedSeconds),
+            "doubling from the five-minute floor, capped at 30 minutes"
+        )
+    }
+
+    @Test("A zero Retry-After changes nothing about the schedule")
+    func zeroRetryAfterIsInert() {
+        let zero = UsageError.from(
+            HTTPResponse(status: 429, headers: ["Retry-After": "0"])
+        )
+        #expect(zero.retry == UsageError.RetryAdvice(delay: .zero, scope: .account))
+        let delay = RefreshPolicy.nextDelay(for: input(outcome: .failure(zero), failures: 1))
+        expectWithinJitter(
+            delay,
+            of: RefreshPolicy.idleInterval,
+            "zero advice neither shortens nor stretches the backoff"
+        )
     }
 
     @Test("A reset further out than the cadence does not delay the refresh")
@@ -221,14 +304,16 @@ struct RefreshPolicyTests {
         #expect(delays.count > 1, "accounts must not all wake in the same instant")
     }
 
-    /// A reset 30s out shortens the delay to 60s, so jitter must shrink to 6s rather than staying
-    /// at the 30s it is allowed on the five-minute cadence.
+    /// Credential recovery is the one path still allowed under the five-minute floor, so its
+    /// 30-second delay is where proportional jitter shows: 3s, not the 30s the idle cadence gets.
     @Test("Jitter of a short delay stays proportional rather than fixed")
     func jitterScalesWithTheDelay() {
-        let soon = [now.adding(.seconds(30))]
+        let vanished = UsageError.credentialUnavailable(kind: .keychain)
         for id in (0..<24).map({ "account-\($0)" }) {
-            let delay = RefreshPolicy.nextDelay(for: input(id, resets: soon))
-            #expect(delay <= .seconds(60) + .seconds(6))
+            let delay = RefreshPolicy.nextDelay(
+                for: input(id, outcome: .failure(vanished), failures: 1)
+            )
+            #expect(delay <= .seconds(30) + .seconds(3))
         }
     }
 }

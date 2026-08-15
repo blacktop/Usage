@@ -29,8 +29,15 @@ struct ProviderAccountIssuePresentation {
     let notice: String?
 
     init(account: ProviderUsagePresentation.Account) {
-        error = account.state?.lastError
-        if account.state?.report?.isPartial == true {
+        let lastError = account.state?.lastError
+        // A 429 is evidence about the provider endpoint, not proof that the account exhausted its
+        // usage allowance. Keep it visible as an error, but do not offer a manual retry that could
+        // hammer the endpoint ahead of the scheduler's backoff.
+        let throttled = lastError?.category == .rateLimited
+        error = lastError
+        if throttled {
+            notice = nil
+        } else if account.state?.report?.isPartial == true {
             notice = "Some limits could not be read"
         } else if let state = account.state, state.report == nil, state.lastError == nil {
             notice = "No usage recorded yet"
@@ -75,9 +82,11 @@ private struct ProviderErrorRow: View {
                 }
             }
             Spacer(minLength: 6)
-            Button(error.requiresCredentialApproval ? "Approve" : "Retry", action: retry)
-                .buttonStyle(.link)
-                .font(.caption2)
+            if error.category != .rateLimited {
+                Button(error.requiresCredentialApproval ? "Approve" : "Retry", action: retry)
+                    .buttonStyle(.link)
+                    .font(.caption2)
+            }
         }
     }
 }

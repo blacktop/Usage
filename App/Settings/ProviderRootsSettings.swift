@@ -29,6 +29,11 @@ struct ProviderRootsSettings: View {
                     }
                 } header: {
                     header(section)
+                } footer: {
+                    if let guidance = ProviderCredentialDocuments.guidance(for: section.id) {
+                        Text(guidance)
+                            .textSelection(.enabled)
+                    }
                 }
             }
         }

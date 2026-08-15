@@ -33,6 +33,8 @@ targets:
     platform: macOS
     sources:
       - path: App
+      - path: Resources/Usage.icon
+        buildPhase: resources
     dependencies:
       - package: UsageCore
         product: UsageKit

@@ -100,6 +100,10 @@ extension RefreshCoordinator {
         isSuspended = false
         await discover()
         markDue(at: clock.now)
+        // Deadlines may just have been pulled to the floor. A parked timer re-times itself when
+        // its wait is interrupted, so the next wave fires at the new earliest deadline instead
+        // of whatever it went to sleep for.
+        sleepTask?.cancel()
         await runWave()
         ensureScheduler()
     }
@@ -273,13 +277,34 @@ extension RefreshCoordinator {
 // MARK: - Waves
 
 extension RefreshCoordinator {
-    /// Marks every idle account due now. A cooldown is not consulted here and does not need to be:
-    /// `claimIfDue` is the one place a fetch can start, and it refuses a cooling account there.
+    /// Marks every idle account due, no earlier than the five-minute floor allows.
+    ///
+    /// Launch, wake, and the manual refresh button all land here, and none of them may undercut
+    /// the floor: an account whose last attempt cost a provider request within the last five
+    /// minutes keeps its schedule, pulled forward at most to the floor itself. Claude's usage
+    /// endpoint budgets a handful of requests per token, so a hand that keeps pressing Refresh
+    /// must not be able to hold an account rate-limited forever. Attempts that never sent a
+    /// request — a first fetch, a vanished credential, a read awaiting approval — cost no budget
+    /// and go now. A cooldown is not consulted here and does not need to be: `claimIfDue` is the
+    /// one place a fetch can start, and it refuses a cooling account there.
     private func markDue(at now: Date) {
         for key in order {
             guard var state = states[key], !state.isInFlight else { continue }
-            state.dueAt = now
+            state.dueAt = manualDeadline(for: state, at: now)
             states[key] = state
+        }
+    }
+
+    private func manualDeadline(for state: ScheduleState, at now: Date) -> Date {
+        switch state.outcome {
+        case .initial:
+            return now
+        case .failure(let error)
+        where error.category == .credentialUnavailable || error.category == .interactionRequired:
+            return now
+        case .success, .failure:
+            let floor = state.anchoredAt.adding(RefreshPolicy.idleInterval)
+            return max(now, min(state.dueAt, floor))
         }
     }
 
@@ -451,11 +476,14 @@ extension RefreshCoordinator {
                 clampDeadlines(ofProvider: key.providerID)
             }
         }
-        if error.category == .credentialUnavailable {
+        if error.category == .credentialUnavailable || error.category == .authenticationExpired {
             // A credential that was discovered and is suddenly unavailable usually means its
             // keychain item was rotated out from under the cached locator — Claude Code rewrites
             // its row on every token refresh. Retrying with the same locator cannot succeed, so
-            // the wave that retries this account must re-resolve credentials first.
+            // the wave that retries this account must re-resolve credentials first. A 401 gets
+            // the same treatment: the stored token expired or rotated, and rediscovery is what
+            // lets a freshly written credential or a newly added source take over on the next
+            // wave. Both rediscoveries are local attribute reads, so the extra cost is nothing.
             nextDiscoveryAt = now
         }
         states[key] = state

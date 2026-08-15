@@ -52,7 +52,10 @@ private struct ProviderAccountMeter: View {
     let meter: ProviderUsagePresentation.WindowGroup.Meter
     let showsFootnote: Bool
 
-    private var tint: Color { AccountTint.color(at: meter.account.colorIndex) }
+    private var tint: Color {
+        UsageSeverity.color(forRemaining: meter.window.remainingFraction)
+            ?? AccountTint.color(at: meter.account.colorIndex)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -61,7 +64,7 @@ private struct ProviderAccountMeter: View {
                 Text(UsageWindowText.percent(meter.window.remainingFraction))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(tint)
-                    .frame(width: 58, alignment: .trailing)
+                    .frame(width: 40, alignment: .trailing)
             }
             if showsFootnote, let footnote = UsageWindowText.footnote(for: meter.window) {
                 Text(footnote)
@@ -69,7 +72,7 @@ private struct ProviderAccountMeter: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.trailing, 66)
+                    .padding(.trailing, 48)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -103,15 +106,11 @@ private struct CompactProgressBar: View {
 struct ProviderCreditsGroup: View {
     let credits: [ProviderUsagePresentation.Credit]
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 160), spacing: 8, alignment: .leading)
-    ]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Credits")
                 .font(.caption.weight(.medium))
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
                 ForEach(credits) { credit in
                     HStack(spacing: 6) {
                         Circle()
@@ -147,9 +146,22 @@ enum CreditBalanceText {
     }
 }
 
+/// Severity override for a nearly exhausted window.
+///
+/// Below the threshold the bar and its percent abandon the account tint for red, so "this agent
+/// is almost out" reads at a glance. `nil` keeps the account tint; there is deliberately no amber
+/// tier — one alarm color stays legible, a gradient of them becomes decoration.
+enum UsageSeverity {
+    static let criticalRemaining = 0.1
+
+    static func color(forRemaining fraction: Double) -> Color? {
+        fraction < criticalRemaining ? .red : nil
+    }
+}
+
 enum UsageWindowText {
     static func percent(_ fraction: Double) -> String {
-        fraction.formatted(.percent.precision(.fractionLength(0))) + " left"
+        fraction.formatted(.percent.precision(.fractionLength(0)))
     }
 
     static func footnote(for window: UsageWindow) -> String? {

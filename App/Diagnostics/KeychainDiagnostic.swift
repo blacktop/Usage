@@ -19,7 +19,7 @@ enum KeychainDiagnostic {
 
     private static let diagnoseFlag = "--diagnose-keychain"
     private static let allowUIFlag = "--allow-ui"
-    private static let logger = Logger(subsystem: "dev.blacktop.Usage", category: "keychain-gate")
+    private static let logger = Logger(subsystem: "io.blacktop.Usage", category: "keychain-gate")
 
     struct Invocation: Equatable {
         var allowsUILegs: Bool

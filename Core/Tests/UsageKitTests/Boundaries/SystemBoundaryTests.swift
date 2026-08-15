@@ -216,6 +216,63 @@ struct SystemBoundaryTests {
         #expect(!UsageError.credentialUnavailable(kind: .file).requiresCredentialApproval)
     }
 
+    @Test("an unavailable suppression lever fails a background keychain read closed")
+    func suppressionUnavailableFailsKeychainReadClosed() async throws {
+        let source = KeychainCredentialSource(
+            interaction: BackgroundInteractionPolicy(),
+            suppressionAvailable: false
+        )
+        let locator = CredentialLocator(
+            kind: .keychain,
+            identifier: KeychainItemReference(data: Data([1, 2, 3])).identifier
+        )
+
+        // Approval-required, not item-missing: a real query against this reference would answer
+        // not-found, so the distinct category is what proves no Security call was issued.
+        await #expect(throws: UsageError.interactionForbidden()) {
+            _ = try await source.withCredential(at: locator) { _ in HTTPResponse(status: 200) }
+        }
+    }
+
+    @Test("an unavailable suppression lever answers background enumeration with nothing")
+    func suppressionUnavailableEnumeratesNothing() async throws {
+        let source = KeychainCredentialSource(
+            interaction: BackgroundInteractionPolicy(),
+            suppressionAvailable: false
+        )
+        let namespace = CredentialLocator(
+            kind: .keychain,
+            identifier: "dev.blacktop.Usage.test-missing-service"
+        )
+        #expect(try await source.slots(in: namespace) == [])
+    }
+
+    @Test("an unavailable suppression lever fails Usage-owned background operations closed")
+    func suppressionUnavailableFailsAppStoreClosed() async throws {
+        let store = AppKeychainCredentialStore(
+            interaction: BackgroundInteractionPolicy(),
+            suppressionAvailable: false
+        )
+        let locator = try #require(
+            AppKeychainCredentialStore.locator(
+                service: "dev.blacktop.Usage.test-missing-service",
+                account: "row"
+            )
+        )
+
+        await #expect(throws: UsageError.interactionForbidden()) {
+            _ = try await store.withCredential(at: locator) { _ in HTTPResponse(status: 200) }
+        }
+        #expect(!store.containsCredential(at: locator))
+        #expect(try await store.slots(in: ClaudeSetupTokenCredential.namespace) == [])
+        #expect(throws: ManagedCredentialStoreError.storageUnavailable) {
+            try store.storeCredential("credential-value", at: locator)
+        }
+        #expect(throws: ManagedCredentialStoreError.storageUnavailable) {
+            try store.removeCredential(at: locator)
+        }
+    }
+
     @Test("the system source's default and its background policy build the same query")
     func systemSourceDefaultsToFailingClosed() {
         let service = KeychainCredentialSource.enumerationQuery(service: "Codex Auth")
@@ -227,6 +284,52 @@ struct SystemBoundaryTests {
     @Test("the legacy UI-fail marker resolves to the framework's own value")
     func resolvesTheLegacyUIFailValue() {
         #expect(KeychainNoUIPolicy().resolvedUIFailValue == "u_AuthUIF")
+    }
+
+    @Test("a Usage-owned enumeration query returns attributes and never payload bytes")
+    func appKeychainEnumerationIsAttributesOnly() {
+        let query = AppKeychainCredentialStore.enumerationQuery(
+            service: ClaudeSetupTokenCredential.service
+        )
+
+        #expect(query[kSecAttrService as String] as? String == ClaudeSetupTokenCredential.service)
+        #expect(query[kSecReturnAttributes as String] as? Bool == true)
+        #expect(query[kSecReturnData as String] == nil)
+        #expect(query[kSecMatchLimit as String] as? String == kSecMatchLimitAll as String)
+    }
+
+    @Test("a Usage-owned payload query addresses exactly one service account")
+    func appKeychainPayloadIsSingleAccount() {
+        let query = AppKeychainCredentialStore.payloadQuery(
+            service: ClaudeSetupTokenCredential.service,
+            account: "profile-fixture"
+        )
+
+        #expect(query[kSecAttrService as String] as? String == ClaudeSetupTokenCredential.service)
+        #expect(query[kSecAttrAccount as String] as? String == "profile-fixture")
+        #expect(query[kSecReturnData as String] as? Bool == true)
+        #expect(query[kSecMatchLimit as String] as? String == kSecMatchLimitOne as String)
+    }
+
+    @Test("Usage-owned Keychain addresses reject ambiguous or multiline components")
+    func appKeychainAddressesFailClosed() {
+        #expect(
+            AppKeychainCredentialStore.namespace(service: "dev.blacktop.Usage.fixture")?.kind
+                == .appKeychain
+        )
+        #expect(
+            AppKeychainCredentialStore.locator(
+                service: "dev.blacktop.Usage.fixture",
+                account: "profile-fixture"
+            )?.path == ["profile-fixture"]
+        )
+        #expect(AppKeychainCredentialStore.namespace(service: " \n ") == nil)
+        #expect(
+            AppKeychainCredentialStore.locator(
+                service: "dev.blacktop.Usage.fixture",
+                account: "profile\nother"
+            ) == nil
+        )
     }
 
     @Test("a row reference round-trips through a locator identifier")

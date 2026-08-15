@@ -16,8 +16,9 @@ struct UserDefaultsProfileRootStoreTests {
 
         let profiles = try await store.load()
 
-        #expect(UserDefaultsProfileRootStore.suiteName == "dev.blacktop.Usage.shared")
-        #expect(UserDefaultsProfileRootStore.suiteName != "dev.blacktop.Usage")
+        #expect(UserDefaultsProfileRootStore.suiteName == "io.blacktop.Usage.shared")
+        #expect(UserDefaultsProfileRootStore.suiteName != "io.blacktop.Usage")
+        #expect(UserDefaultsProfileRootStore.legacySuiteName == "dev.blacktop.Usage.shared")
         #expect(
             profiles.profiles.map(\.configurationDirectoryPath) == [
                 "/Users/injected/.claude",
@@ -54,6 +55,80 @@ struct UserDefaultsProfileRootStoreTests {
         #expect(
             fixture.defaults.data(forKey: UserDefaultsProfileRootStore.storageKey) != nil
         )
+    }
+
+    @Test("An empty suite migrates the legacy pre-io payload forward without clearing it")
+    func migratesLegacySuiteForward() async throws {
+        let fixture = try DefaultsFixture()
+        let legacy = try DefaultsFixture()
+        defer {
+            fixture.remove()
+            legacy.remove()
+        }
+        var profiles = try ProfileRootCollection()
+        try profiles.add(
+            providerID: ProviderID("claude"),
+            label: "Migrated",
+            configurationDirectoryPath: "/Users/injected/.claude"
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        legacy.defaults.set(
+            try encoder.encode(profiles),
+            forKey: UserDefaultsProfileRootStore.storageKey
+        )
+        let store = UserDefaultsProfileRootStore(
+            homeDirectory: URL(filePath: "/Users/injected"),
+            suiteDefaults: fixture.defaults,
+            legacyDefaults: legacy.defaults
+        )
+
+        let loaded = try await store.load()
+
+        #expect(loaded == profiles, "the configured roots survive the bundle-ID move")
+        #expect(
+            fixture.defaults.data(forKey: UserDefaultsProfileRootStore.storageKey) != nil,
+            "the payload is copied forward so later loads never depend on the legacy suite"
+        )
+        #expect(
+            legacy.defaults.data(forKey: UserDefaultsProfileRootStore.storageKey) != nil,
+            "the legacy suite is never cleared; a downgraded build keeps working"
+        )
+    }
+
+    @Test("A populated suite never consults the legacy one")
+    func populatedSuiteIgnoresLegacy() async throws {
+        let fixture = try DefaultsFixture()
+        let legacy = try DefaultsFixture()
+        defer {
+            fixture.remove()
+            legacy.remove()
+        }
+        var current = try ProfileRootCollection()
+        try current.add(
+            providerID: ProviderID("codex"),
+            label: "Current",
+            configurationDirectoryPath: "/Users/injected/.codex"
+        )
+        var stale = try ProfileRootCollection()
+        try stale.add(
+            providerID: ProviderID("claude"),
+            label: "Stale",
+            configurationDirectoryPath: "/Users/injected/.claude"
+        )
+        let encoder = JSONEncoder()
+        legacy.defaults.set(
+            try encoder.encode(stale),
+            forKey: UserDefaultsProfileRootStore.storageKey
+        )
+        let store = UserDefaultsProfileRootStore(
+            homeDirectory: URL(filePath: "/Users/injected"),
+            suiteDefaults: fixture.defaults,
+            legacyDefaults: legacy.defaults
+        )
+        try await store.save(current)
+
+        #expect(try await store.load() == current)
     }
 
     @Test("The store round-trips an unlimited ordered collection including disabled roots")

@@ -10,9 +10,8 @@ import UsageKit
 /// persisted, save, and only then adopt it. A rejected edit and a failed save are the same thing to
 /// a reader: the rows on screen are still the ones in storage.
 ///
-/// Nothing here opens a credential. The only thing this asks the file system is whether a document
-/// a provider is known to read exists below a configured root, and the only thing it stores about a
-/// folder the user picked is that folder's path.
+/// Nothing here reads a credential payload. It checks whether a known document or Usage-owned
+/// Keychain item exists, and only an explicit token action writes or removes the latter.
 @Observable
 @MainActor
 final class ProfileSettingsModel {
@@ -20,6 +19,7 @@ final class ProfileSettingsModel {
     struct RootRow: Identifiable, Equatable {
         let profile: ProfileRoot
         let hasCredentialDocument: Bool
+        let hasSetupToken: Bool
 
         var id: ProfileRootID { profile.id }
     }
@@ -45,6 +45,7 @@ final class ProfileSettingsModel {
     @ObservationIgnored private let store: any ProfileRootStore
     @ObservationIgnored private let registry: ProviderRegistry
     @ObservationIgnored private let fileSystem: any ProviderFileSystem
+    @ObservationIgnored private let managedCredentials: any ManagedCredentialStore
     @ObservationIgnored private let reveal: @MainActor (URL) -> Void
     @ObservationIgnored private let rediscover: @MainActor () async -> Void
 
@@ -59,12 +60,14 @@ final class ProfileSettingsModel {
         store: any ProfileRootStore,
         registry: ProviderRegistry,
         fileSystem: any ProviderFileSystem,
+        managedCredentials: any ManagedCredentialStore,
         reveal: @escaping @MainActor (URL) -> Void,
         rediscover: @escaping @MainActor () async -> Void
     ) {
         self.store = store
         self.registry = registry
         self.fileSystem = fileSystem
+        self.managedCredentials = managedCredentials
         self.reveal = reveal
         self.rediscover = rediscover
     }
@@ -75,6 +78,9 @@ final class ProfileSettingsModel {
             store: model.profileRoots,
             registry: model.registry,
             fileSystem: model.fileSystem,
+            managedCredentials: AppKeychainCredentialStore(
+                interaction: UserInitiatedInteractionPolicy()
+            ),
             reveal: { NSWorkspace.shared.activateFileViewerSelecting([$0]) },
             rediscover: { [weak model] in await model?.refreshNow() }
         )
@@ -133,6 +139,55 @@ final class ProfileSettingsModel {
         await perform(.remove(id: id))
     }
 
+    /// Saves one `claude setup-token` into Usage's own Keychain service.
+    ///
+    /// The secret is handed directly to the boundary and is never retained in observable state,
+    /// preferences, the configured-root collection, or a refresh task.
+    @discardableResult
+    func saveClaudeSetupToken(_ token: String, for id: ProfileRootID) -> Bool {
+        guard let profile = persisted?.profiles.first(where: { $0.id == id }),
+            profile.providerID == ClaudeProvider.id
+        else {
+            errorMessage = "This setup token no longer has a Claude profile to belong to."
+            return false
+        }
+        do {
+            try managedCredentials.storeCredential(
+                token,
+                at: ClaudeSetupTokenCredential.locator(for: profile.id)
+            )
+        } catch {
+            errorMessage = Self.message(for: error)
+            return false
+        }
+        errorMessage = nil
+        rebuildSections()
+        requestRediscovery()
+        return true
+    }
+
+    @discardableResult
+    func removeClaudeSetupToken(for id: ProfileRootID) -> Bool {
+        guard let profile = persisted?.profiles.first(where: { $0.id == id }),
+            profile.providerID == ClaudeProvider.id
+        else {
+            errorMessage = "This setup token no longer has a Claude profile to belong to."
+            return false
+        }
+        do {
+            try managedCredentials.removeCredential(
+                at: ClaudeSetupTokenCredential.locator(for: profile.id)
+            )
+        } catch {
+            errorMessage = Self.message(for: error)
+            return false
+        }
+        errorMessage = nil
+        rebuildSections()
+        requestRediscovery()
+        return true
+    }
+
     /// Reports a folder the file importer could not hand over. Nothing is stored.
     func reportFolderSelectionFailure(_ error: any Error) {
         errorMessage = error.localizedDescription
@@ -189,6 +244,19 @@ final class ProfileSettingsModel {
         } catch {
             errorMessage = message(for: error)
             return
+        }
+        if case .remove(let id) = mutation,
+            let removed = current.profiles.first(where: { $0.id == id }),
+            removed.providerID == ClaudeProvider.id
+        {
+            do {
+                try managedCredentials.removeCredential(
+                    at: ClaudeSetupTokenCredential.locator(for: removed.id)
+                )
+            } catch {
+                errorMessage = Self.message(for: error)
+                return
+            }
         }
         do {
             try await store.save(candidate)
@@ -273,7 +341,11 @@ final class ProfileSettingsModel {
                     hasCredentialDocument: ProviderCredentialDocuments.exists(
                         below: profile,
                         using: fileSystem
-                    )
+                    ),
+                    hasSetupToken: profile.providerID == ClaudeProvider.id
+                        && managedCredentials.containsCredential(
+                            at: ClaudeSetupTokenCredential.locator(for: profile.id)
+                        )
                 )
             )
         }
@@ -327,6 +399,15 @@ final class ProfileSettingsModel {
             "Provider folders could not be saved to preferences."
         case .invalidDefaultRoots(let error):
             error.description
+        }
+    }
+
+    private static func message(for error: ManagedCredentialStoreError) -> String {
+        switch error {
+        case .invalidCredential:
+            "Paste the single-line token printed by claude setup-token."
+        case .storageUnavailable:
+            "The Claude setup token could not be updated in the Usage Keychain."
         }
     }
 

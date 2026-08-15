@@ -10,30 +10,16 @@ struct ClaudeProviderTests {
     /// A clock set before the happy fixture's expiry and after the expired fixture's.
     private static let now = Date(timeIntervalSince1970: 1_784_000_000)
 
-    private static func keychainDescriptor(
-        root: URL,
-        identifier: String,
-        service: String? = nil,
-        account: String = "fixture"
-    ) -> (CredentialLocator, CredentialSlotDescriptor) {
-        let service = service ?? ClaudeCredentialFile.keychainService(root: root)
-        let namespace = CredentialLocator(kind: .keychain, identifier: service)
-        return (
-            namespace,
-            CredentialSlotDescriptor(
-                slot: CredentialSlotID(source: "keychain:\(service)", opaqueID: account),
-                locator: CredentialLocator(kind: .keychain, identifier: identifier),
-                displayName: account
-            )
-        )
-    }
-
     private static func fileLocator() -> CredentialLocator {
         CredentialLocator(
             kind: .file,
             identifier: credentialURL.standardizedFileURL.path(percentEncoded: false),
             path: ClaudeCredentialFile.secretPath
         )
+    }
+
+    private static func keychainNamespace(for root: URL) -> CredentialLocator {
+        ClaudeCodeKeychain.namespace(for: root, homeDirectory: ProviderFixtures.home)
     }
 
     private func fileSystem(credential fixture: String?) throws -> SealedFileSystem {
@@ -120,149 +106,230 @@ struct ClaudeProviderTests {
             ClaudePlanLabel.make(subscriptionType: subscription, rateLimitTier: tier) == expected)
     }
 
-    // MARK: - Root-scoped Keychain credentials
+    // MARK: - Usage-owned setup tokens
 
-    @Test("the root-scoped OAuth Keychain service is stable for a canonical Claude root")
-    func keychainServiceName() {
-        #expect(
-            ClaudeCredentialFile.keychainService(root: ProviderFixtures.claudeRoot)
-                == "Claude Code-credentials-45fdef0d"
-        )
+    @Test("the setup-token service is Usage-owned and unrelated to Claude Code's item")
+    func setupTokenServiceName() {
+        #expect(ClaudeSetupTokenCredential.service == "io.blacktop.Usage.claude-setup-token")
+        #expect(ClaudeSetupTokenCredential.service != KeychainProbe.claudeService)
+        #expect(ClaudeSetupTokenCredential.namespace.kind == .appKeychain)
     }
 
-    @Test("the default Claude root uses the unsuffixed service before its compatibility fallback")
-    func defaultRootUsesUnsuffixedService() async throws {
-        let current = Self.keychainDescriptor(
-            root: ProviderFixtures.claudeRoot,
-            identifier: "persistent-current",
-            service: ClaudeCredentialFile.keychainService
+    @Test("the default root uses Claude Code's plain service, never its stale hashed service")
+    func defaultRootUsesPlainClaudeKeychain() async throws {
+        let defaultNamespace = CredentialLocator(
+            kind: .keychain,
+            identifier: KeychainProbe.claudeService
         )
-        let fallback = Self.keychainDescriptor(
-            root: ProviderFixtures.claudeRoot,
-            identifier: "persistent-fallback"
+        let staleHashedNamespace = CredentialLocator(
+            kind: .keychain,
+            identifier: "Claude Code-credentials-45fdef0d"
+        )
+        let currentDescriptor = CredentialSlotDescriptor(
+            slot: CredentialSlotID(source: "keychain", opaqueID: "fixture"),
+            locator: CredentialLocator(kind: .keychain, identifier: "current-reference"),
+            displayName: "fixture"
+        )
+        let staleDescriptor = CredentialSlotDescriptor(
+            slot: CredentialSlotID(source: "keychain", opaqueID: "stale"),
+            locator: CredentialLocator(kind: .keychain, identifier: "stale-reference"),
+            displayName: "stale"
         )
         let credentials = SealedCredentialSource(
-            slots: [current.0: [current.1], fallback.0: [fallback.1]]
+            slots: [
+                defaultNamespace: [currentDescriptor],
+                staleHashedNamespace: [staleDescriptor],
+            ]
         )
-
-        let account = try #require(
-            try await ClaudeProvider().discoverAccounts(
-                using: ProviderContext.sealed(credentials: credentials)
-            ).first
-        )
-
-        #expect(account.locator.identifier == "persistent-current")
-        #expect(credentials.enumeratedNamespaces == [current.0])
-    }
-
-    @Test("the default Claude root accepts the hashed service when the unsuffixed item is absent")
-    func defaultRootFallsBackToHashedService() async throws {
-        let current = CredentialLocator(
-            kind: .keychain,
-            identifier: ClaudeCredentialFile.keychainService
-        )
-        let fallback = Self.keychainDescriptor(
-            root: ProviderFixtures.claudeRoot,
-            identifier: "persistent-fallback"
-        )
-        let credentials = SealedCredentialSource(slots: [fallback.0: [fallback.1]])
-
-        let account = try #require(
-            try await ClaudeProvider().discoverAccounts(
-                using: ProviderContext.sealed(credentials: credentials)
-            ).first
-        )
-
-        #expect(account.locator.identifier == "persistent-fallback")
-        #expect(credentials.enumeratedNamespaces == [current, fallback.0])
-    }
-
-    @Test("Claude selects the Keychain row for the injected home user")
-    func selectsCurrentUserKeychainRow() async throws {
-        let other = Self.keychainDescriptor(
-            root: ProviderFixtures.claudeRoot,
-            identifier: "persistent-other",
-            service: ClaudeCredentialFile.keychainService,
-            account: "someone-else"
-        )
-        let current = Self.keychainDescriptor(
-            root: ProviderFixtures.claudeRoot,
-            identifier: "persistent-current",
-            service: ClaudeCredentialFile.keychainService
-        )
-        let credentials = SealedCredentialSource(slots: [current.0: [other.1, current.1]])
-
-        let account = try #require(
-            try await ClaudeProvider().discoverAccounts(
-                using: ProviderContext.sealed(credentials: credentials)
-            ).first
-        )
-
-        #expect(account.locator.identifier == "persistent-current")
-    }
-
-    @Test("Claude never borrows a Keychain row belonging to another macOS user")
-    func rejectsOtherUsersSoleKeychainRow() async throws {
-        let other = Self.keychainDescriptor(
-            root: ProviderFixtures.claudeRoot,
-            identifier: "persistent-other",
-            service: ClaudeCredentialFile.keychainService,
-            account: "someone-else"
-        )
-        let credentials = SealedCredentialSource(slots: [other.0: [other.1]])
 
         let accounts = try await ClaudeProvider().discoverAccounts(
             using: ProviderContext.sealed(credentials: credentials)
         )
 
-        #expect(accounts.isEmpty)
+        let account = try #require(accounts.first)
+        #expect(accounts.count == 1)
+        #expect(account.locator.identifier == "current-reference")
+        #expect(
+            credentials.enumeratedNamespaces == [
+                ClaudeSetupTokenCredential.namespace,
+                defaultNamespace,
+            ],
+            "the obsolete default-root hash is never consulted"
+        )
         #expect(credentials.resolvedLocators.isEmpty)
     }
 
-    @Test("discovers every configured Claude root through its distinct Keychain service")
-    func discoversMultipleKeychainAccounts() async throws {
-        let work = ProviderFixtures.root("profiles/work")
-        let personal = ProviderFixtures.root("profiles/personal")
-        let workItem = Self.keychainDescriptor(root: work, identifier: "persistent-work")
-        let personalItem = Self.keychainDescriptor(
-            root: personal,
-            identifier: "persistent-personal"
+    @Test("a Claude Code Keychain row beats a setup token and keeps the root's logical slot")
+    func keychainRowTakesPrecedenceOverSetupToken() async throws {
+        let setup = try setupTokenDiscovery()
+        let namespace = Self.keychainNamespace(for: ProviderFixtures.claudeRoot)
+        let rowDescriptor = CredentialSlotDescriptor(
+            slot: CredentialSlotID(source: "keychain:\(namespace.identifier)", opaqueID: "user"),
+            locator: CredentialLocator(kind: .keychain, identifier: "cmVmZXJlbmNl")
         )
         let credentials = SealedCredentialSource(
-            slots: [workItem.0: [workItem.1], personalItem.0: [personalItem.1]]
+            slots: [
+                namespace: [rowDescriptor],
+                ClaudeSetupTokenCredential.namespace: [
+                    setupTokenDescriptor(locator: setup.locator)
+                ],
+            ]
         )
         let context = ProviderContext.sealed(
             credentials: credentials,
-            profileRoots: try SealedProfileRoots.store(
-                SealedProfileRoots.root(ClaudeProvider.id, label: "Work", at: work),
-                SealedProfileRoots.root(ClaudeProvider.id, label: "Personal", at: personal)
-            )
+            clock: ManualClock(now: Self.now),
+            profileRoots: setup.profileRoots
+        )
+
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(using: context).first
+        )
+        let setupAccount = try #require(
+            try await ClaudeProvider().discoverAccounts(using: setup.context).first
+        )
+
+        #expect(account.locator.kind == .keychain)
+        #expect(account.locator.identifier == "cmVmZXJlbmNl")
+        #expect(account.locator.path == ClaudeCredentialFile.secretPath)
+        #expect(account.availability == .active)
+        #expect(account.slot == setupAccount.slot, "identity survives the backend change")
+        #expect(credentials.resolvedLocators.isEmpty, "discovery never reads payloads")
+    }
+
+    @Test("a keychain-backed fetch stamps the bearer and reads the plan from the document")
+    func fetchesWithKeychainCredential() async throws {
+        let root = try SealedProfileRoots.root(
+            ClaudeProvider.id,
+            label: "Claude",
+            at: ProviderFixtures.claudeRoot
+        )
+        let namespace = Self.keychainNamespace(for: ProviderFixtures.claudeRoot)
+        let locator = CredentialLocator(
+            kind: .keychain,
+            identifier: "cmVmZXJlbmNl",
+            path: ClaudeCredentialFile.secretPath
+        )
+        let http = InMemoryHTTPTransport()
+        http.stub(
+            ClaudeProvider.usageURL,
+            with: try ProviderFixtures.response("Claude", "claude-usage-happy")
+        )
+        let credentials = SealedCredentialSource(
+            secrets: [locator: Self.accessToken],
+            documents: [locator: try ProviderFixtures.data("Claude", "claude-credential-happy")],
+            slots: [
+                namespace: [
+                    CredentialSlotDescriptor(
+                        slot: CredentialSlotID(
+                            source: "keychain:\(namespace.identifier)", opaqueID: "user"),
+                        locator: CredentialLocator(kind: .keychain, identifier: "cmVmZXJlbmNl")
+                    )
+                ]
+            ]
+        )
+        let context = ProviderContext.sealed(
+            credentials: credentials,
+            http: http,
+            clock: ManualClock(now: Self.now),
+            profileRoots: try SealedProfileRoots.store(root)
+        )
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(using: context).first
+        )
+
+        let report = try await ClaudeProvider().fetchUsage(for: account, using: context)
+
+        #expect(report.plan == "Claude Max 20x", "the plan label comes from the keychain payload")
+        #expect(!report.windows.isEmpty)
+        let request = try #require(http.recordedRequests.first)
+        #expect(request.url == ClaudeProvider.usageURL)
+        #expect(request.headerValue("Authorization") == "Bearer \(Self.accessToken)")
+        #expect(credentials.resolvedLocators == [locator])
+    }
+
+    @Test("a 401 on a keychain credential recommends running claude, and only there")
+    func keychainFailureRecommendsClaudeLogin() {
+        let expired = UsageError.from(HTTPResponse(status: 401))
+
+        let keychain = ClaudeProvider.annotated(
+            expired,
+            for: CredentialLocator(kind: .keychain, identifier: "ref")
+        )
+        #expect(keychain.reauthentication?.command == "claude")
+
+        let file = ClaudeProvider.annotated(
+            expired,
+            for: CredentialLocator(kind: .file, identifier: "/fixture/.credentials.json")
+        )
+        #expect(file.reauthentication?.command == nil)
+        #expect(file.reauthentication?.summary.contains(".credentials.json") == true)
+
+        let setupToken = ClaudeProvider.annotated(
+            expired,
+            for: ClaudeSetupTokenCredential.locator(for: ProfileRootID())
+        )
+        #expect(setupToken.reauthentication?.command == nil)
+        #expect(setupToken.reauthentication?.summary.contains("Settings") == true)
+
+        let unrelated = ClaudeProvider.annotated(
+            UsageError.from(HTTPResponse(status: 500)),
+            for: CredentialLocator(kind: .keychain, identifier: "ref")
+        )
+        #expect(unrelated.reauthentication == nil, "only credential failures carry recovery")
+    }
+
+    @Test("discovers every configured Claude root through one Usage-owned service")
+    func discoversMultipleSetupTokenAccounts() async throws {
+        let work = ProviderFixtures.root("profiles/work")
+        let personal = ProviderFixtures.root("profiles/personal")
+        let workRoot = try SealedProfileRoots.root(ClaudeProvider.id, label: "Work", at: work)
+        let personalRoot = try SealedProfileRoots.root(
+            ClaudeProvider.id,
+            label: "Personal",
+            at: personal
+        )
+        let workLocator = ClaudeSetupTokenCredential.locator(for: workRoot.id)
+        let personalLocator = ClaudeSetupTokenCredential.locator(for: personalRoot.id)
+        let credentials = SealedCredentialSource(
+            slots: [
+                ClaudeSetupTokenCredential.namespace: [
+                    setupTokenDescriptor(locator: workLocator),
+                    setupTokenDescriptor(locator: personalLocator),
+                ]
+            ]
+        )
+        let context = ProviderContext.sealed(
+            credentials: credentials,
+            profileRoots: try SealedProfileRoots.store(workRoot, personalRoot)
         )
 
         let accounts = try await ClaudeProvider().discoverAccounts(using: context)
 
         #expect(accounts.map(\.displayName) == ["Work", "Personal"])
-        #expect(accounts.map(\.locator.kind) == [.keychain, .keychain])
-        #expect(accounts.map(\.locator.identifier) == ["persistent-work", "persistent-personal"])
-        #expect(credentials.enumeratedNamespaces == [workItem.0, personalItem.0])
-        #expect(credentials.resolvedLocators.isEmpty, "discovery must never read Keychain payloads")
+        #expect(accounts.map(\.locator) == [workLocator, personalLocator])
+        #expect(
+            credentials.enumeratedNamespaces == [
+                ClaudeSetupTokenCredential.namespace,
+                Self.keychainNamespace(for: work),
+                Self.keychainNamespace(for: personal),
+            ],
+            "each custom root's hashed service is consulted before its setup token"
+        )
+        #expect(credentials.resolvedLocators.isEmpty, "discovery never reads token payloads")
     }
 
     @Test("a credential file takes precedence without changing the root's logical slot")
-    func fileTakesPrecedenceOverKeychain() async throws {
-        let item = Self.keychainDescriptor(
-            root: ProviderFixtures.claudeRoot,
-            identifier: "persistent-claude"
+    func fileTakesPrecedenceOverSetupToken() async throws {
+        let setup = try setupTokenDiscovery()
+        let setupAccount = try #require(
+            try await ClaudeProvider().discoverAccounts(using: setup.context).first
         )
-        let credentials = SealedCredentialSource(slots: [item.0: [item.1]])
-        let keychainAccount = try #require(
-            try await ClaudeProvider().discoverAccounts(
-                using: ProviderContext.sealed(credentials: credentials)
-            ).first
-        )
-        let context = try context(
-            credential: "claude-credential-happy",
-            credentials: credentials
+        let files = try fileSystem(credential: "claude-credential-happy")
+        let context = ProviderContext.sealed(
+            fileSystem: files,
+            credentials: setup.credentials,
+            clock: ManualClock(now: Self.now),
+            profileRoots: setup.profileRoots
         )
 
         let account = try #require(
@@ -270,21 +337,58 @@ struct ClaudeProviderTests {
         )
 
         #expect(account.locator.kind == .file)
-        #expect(account.slot == keychainAccount.slot)
-        #expect(credentials.resolvedLocators.isEmpty)
+        #expect(account.slot == setupAccount.slot)
+        #expect(setup.credentials.resolvedLocators.isEmpty)
     }
 
-    @Test("fetch parses the Keychain credential document inside the operation")
-    func fetchesWithKeychainCredential() async throws {
+    @Test("an unusable credential file falls back to the root's setup token")
+    func unusableFileFallsBackToSetupToken() async throws {
+        let setup = try setupTokenDiscovery()
+        let files = try fileSystem(credential: "claude-credential-mcp-only")
+        let context = ProviderContext.sealed(
+            fileSystem: files,
+            credentials: setup.credentials,
+            clock: ManualClock(now: Self.now),
+            profileRoots: setup.profileRoots
+        )
+
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(using: context).first
+        )
+
+        #expect(account.locator == setup.locator)
+        #expect(account.availability == .active)
+        #expect(setup.credentials.resolvedLocators.isEmpty)
+    }
+
+    @Test("an unusable credential file remains visible when no setup token exists")
+    func unusableFileWithoutSetupTokenStaysUnavailable() async throws {
+        let context = try context(credential: "claude-credential-mcp-only")
+
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(using: context).first
+        )
+
+        #expect(account.locator.kind == .file)
+        #expect(account.availability == .unavailable)
+    }
+
+    @Test("a setup token fetch maps unified headers without calling the profile endpoint")
+    func fetchesWithSetupToken() async throws {
         let http = InMemoryHTTPTransport()
         http.stub(
-            ClaudeProvider.usageURL,
-            with: try ProviderFixtures.response("Claude", "claude-usage-happy")
+            ClaudeProvider.messagesURL,
+            with: HTTPResponse(
+                status: 200,
+                headers: [
+                    "anthropic-ratelimit-unified-5h-utilization": "0.11",
+                    "anthropic-ratelimit-unified-5h-reset": "1784572200",
+                    "anthropic-ratelimit-unified-7d-utilization": "0.6",
+                    "anthropic-ratelimit-unified-7d-reset": "1784883600",
+                ]
+            )
         )
-        let setup = try await keychainAccount(
-            credential: "claude-credential-happy",
-            http: http
-        )
+        let setup = try await setupTokenAccount(http: http)
 
         let report = try await ClaudeProvider().fetchUsage(
             for: setup.account,
@@ -294,29 +398,63 @@ struct ClaudeProviderTests {
         #expect(
             http.recordedRequests.first?.headerValue("Authorization")
                 == "Bearer \(Self.accessToken)")
-        #expect(report.plan == "Claude Max 20x")
+        #expect(http.recordedRequests.first?.url == ClaudeProvider.messagesURL)
+        #expect(report.plan == "Claude setup token")
+        #expect(report.windows.map(\.usedFraction) == [0.11, 0.6])
+        #expect(report.windows.first?.resetsAt == Date(timeIntervalSince1970: 1_784_572_200))
+        #expect(!report.isPartial, "both setup-token windows were read")
         #expect(setup.credentials.resolvedLocators == [setup.locator])
     }
 
-    @Test("a locally expired Keychain token is still offered to the provider")
-    func providerValidatesExpiredKeychainCredential() async throws {
+    @Test("a quota rejection still reports the unified headers it carries")
+    func mapsHeadersOnQuotaRejection() async throws {
         let http = InMemoryHTTPTransport()
         http.stub(
-            ClaudeProvider.usageURL,
-            with: try ProviderFixtures.response("Claude", "claude-usage-happy")
+            ClaudeProvider.messagesURL,
+            with: HTTPResponse(
+                status: 429,
+                headers: [
+                    "anthropic-ratelimit-unified-5h-utilization": "1.01",
+                    "anthropic-ratelimit-unified-5h-reset": "1784572200",
+                ]
+            )
         )
-        let setup = try await keychainAccount(
-            credential: "claude-credential-expired",
-            http: http
-        )
+        let setup = try await setupTokenAccount(http: http)
 
-        _ = try await ClaudeProvider().fetchUsage(
+        let report = try await ClaudeProvider().fetchUsage(
             for: setup.account,
             using: setup.context
         )
 
-        #expect(http.recordedRequests.count == 1)
-        #expect(setup.credentials.resolvedLocators == [setup.locator])
+        #expect(report.windows.map(\.usedFraction) == [1.01])
+        #expect(report.isPartial, "the weekly setup-token window was absent")
+    }
+
+    @Test("authentication remains authoritative when stale rate headers are present")
+    func rejectsAuthenticationFailureWithHeaders() async throws {
+        let http = InMemoryHTTPTransport()
+        http.stub(
+            ClaudeProvider.messagesURL,
+            with: HTTPResponse(
+                status: 401,
+                headers: [
+                    "anthropic-ratelimit-unified-5h-utilization": "0.11",
+                    "anthropic-ratelimit-unified-5h-reset": "1784572200",
+                ]
+            )
+        )
+        let setup = try await setupTokenAccount(http: http)
+
+        do {
+            _ = try await ClaudeProvider().fetchUsage(
+                for: setup.account,
+                using: setup.context
+            )
+            Issue.record("expected authentication failure")
+        } catch let error as UsageError {
+            #expect(error.category == .authenticationExpired)
+            #expect(error.reason == .httpStatus(code: 401))
+        }
     }
 
     // MARK: - Request construction
@@ -333,6 +471,23 @@ struct ClaudeProviderTests {
         #expect(request.headers["anthropic-version"] == nil)
         #expect(request.headers["Authorization"] == nil)
         #expect(request.body == nil)
+    }
+
+    @Test("the setup-token probe is a bounded one-output-token inference request")
+    func buildsSetupTokenProbeRequest() throws {
+        let request = ClaudeProvider.setupTokenProbeRequest()
+        #expect(request.method == .post)
+        #expect(request.url == ClaudeProvider.messagesURL)
+        #expect(request.headers["anthropic-beta"] == "oauth-2025-04-20")
+        #expect(request.headers["anthropic-version"] == "2023-06-01")
+        #expect(request.headers["Authorization"] == nil)
+        let body = try #require(request.body)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        #expect(object["model"] as? String == "claude-haiku-4-5-20251001")
+        #expect(object["max_tokens"] as? Int == 1)
+        #expect((object["messages"] as? [[String: String]])?.count == 1)
     }
 
     @Test("stamps the bearer token onto the sent request")
@@ -391,6 +546,44 @@ struct ClaudeProviderTests {
         let report = try await fetch(usage: "claude-usage-happy")
         #expect(report.windows.filter { $0.kind == .session }.count == 1)
         #expect(report.windows.filter { $0.kind == .weekly }.count == 1)
+        let session = try #require(report.windows.first { $0.kind == .session })
+        #expect(session.usedFraction == 0.125, "the flat member wins over its limits twin")
+    }
+
+    @Test("null flat members are absorbed by the limits array instead of failing the report")
+    func mapsLimitsOnlyPayload() async throws {
+        let report = try await fetch(usage: "claude-usage-limits-only")
+
+        #expect(report.windows.count == 3)
+        let session = try #require(report.windows.first { $0.kind == .session })
+        #expect(session.usedFraction == 0.22)
+        #expect(session.resetsAt == Date(timeIntervalSince1970: 1_784_572_200))
+        let weekly = try #require(report.windows.first { $0.kind == .weekly })
+        #expect(weekly.usedFraction == 0.63)
+        let scoped = try #require(
+            report.windows.first { $0.id.rawValue == "additional:fake-model-a:primary:weekly" }
+        )
+        #expect(scoped.label == "fake-model-a only", "the model id stands in for a null label")
+        #expect(report.credits == nil)
+    }
+
+    @Test(
+        "utilization is a percentage and is only ever divided by 100 — never unit-guessed",
+        arguments: [0.0, 0.5, 1.0, 100.0, 150.0]
+    )
+    func percentIsAlwaysDividedBy100(percent: Double) async throws {
+        let http = InMemoryHTTPTransport()
+        let body = #"{"five_hour": {"utilization": \#(percent)}}"#
+        http.stub(ClaudeProvider.usageURL, with: HTTPResponse(status: 200, body: Data(body.utf8)))
+        let (account, context) = try await signedInAccount(http: http)
+
+        let report = try await ClaudeProvider().fetchUsage(for: account, using: context)
+
+        let session = try #require(report.windows.first)
+        #expect(
+            session.usedFraction == percent / 100,
+            "a real 0.5% stays 0.005; a fractional-looking payload is not reinterpreted"
+        )
     }
 
     @Test("a malformed limits element never discards its valid siblings")
@@ -451,6 +644,11 @@ struct ClaudeProviderTests {
         let error = try await fetchError(usage: "claude-usage-auth-expired", status: 401)
         #expect(error.category == .authenticationExpired)
         #expect(error.reason == .httpStatus(code: 401))
+        #expect(
+            error.reauthentication?.command == nil,
+            "running claude does not rewrite a credential file on macOS"
+        )
+        #expect(error.reauthentication?.summary.contains(".credentials.json") == true)
     }
 
     @Test("the 401 body never reaches the rendered error or its encoding")
@@ -532,7 +730,10 @@ struct ClaudeProviderTests {
         #expect(credentials.mutationAttempts.isEmpty)
         #expect(credentials.isUnmodified)
         #expect(credentials.refusedInteractiveRequests.isEmpty)
-        #expect(credentials.enumeratedNamespaces.isEmpty)
+        #expect(
+            credentials.enumeratedNamespaces == [ClaudeSetupTokenCredential.namespace],
+            "only Usage's own token service is enumerated"
+        )
     }
 
     @Test("a credential that would need UI fails closed during a background refresh")
@@ -577,8 +778,54 @@ struct ClaudeProviderTests {
         return (account, context)
     }
 
-    private func keychainAccount(
-        credential fixture: String,
+    private func setupTokenDescriptor(
+        locator: CredentialLocator
+    ) -> CredentialSlotDescriptor {
+        let account = locator.path.first ?? "invalid"
+        return CredentialSlotDescriptor(
+            slot: CredentialSlotID(
+                source: "app-keychain:\(ClaudeSetupTokenCredential.service)",
+                opaqueID: account
+            ),
+            locator: locator,
+            displayName: account
+        )
+    }
+
+    private func setupTokenDiscovery() throws -> (
+        context: ProviderContext,
+        credentials: SealedCredentialSource,
+        profileRoots: InMemoryProfileRootStore,
+        locator: CredentialLocator
+    ) {
+        let root = try SealedProfileRoots.root(
+            ClaudeProvider.id,
+            label: "Claude",
+            at: ProviderFixtures.claudeRoot
+        )
+        let locator = ClaudeSetupTokenCredential.locator(for: root.id)
+        let credentials = SealedCredentialSource(
+            secrets: [locator: Self.accessToken],
+            slots: [
+                ClaudeSetupTokenCredential.namespace: [
+                    setupTokenDescriptor(locator: locator)
+                ]
+            ]
+        )
+        let profileRoots = try SealedProfileRoots.store(root)
+        return (
+            ProviderContext.sealed(
+                credentials: credentials,
+                clock: ManualClock(now: Self.now),
+                profileRoots: profileRoots
+            ),
+            credentials,
+            profileRoots,
+            locator
+        )
+    }
+
+    private func setupTokenAccount(
         http: InMemoryHTTPTransport
     ) async throws -> (
         account: ProviderAccount,
@@ -586,25 +833,17 @@ struct ClaudeProviderTests {
         credentials: SealedCredentialSource,
         locator: CredentialLocator
     ) {
-        let item = Self.keychainDescriptor(
-            root: ProviderFixtures.claudeRoot,
-            identifier: "persistent-claude"
+        let setup = try setupTokenDiscovery()
+        let context = ProviderContext.sealed(
+            credentials: setup.credentials,
+            http: http,
+            clock: ManualClock(now: Self.now),
+            profileRoots: setup.profileRoots
         )
-        let locator = CredentialLocator(
-            kind: .keychain,
-            identifier: item.1.locator.identifier,
-            path: ClaudeCredentialFile.secretPath
-        )
-        let credentials = SealedCredentialSource(
-            secrets: [locator: Self.accessToken],
-            documents: [locator: try ProviderFixtures.data("Claude", fixture)],
-            slots: [item.0: [item.1]]
-        )
-        let context = try context(credential: nil, http: http, credentials: credentials)
         let account = try #require(
             try await ClaudeProvider().discoverAccounts(using: context).first
         )
-        return (account, context, credentials, locator)
+        return (account, context, setup.credentials, setup.locator)
     }
 
     private func fetch(usage fixture: String) async throws -> UsageReport {

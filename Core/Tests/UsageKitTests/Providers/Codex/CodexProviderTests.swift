@@ -162,6 +162,43 @@ struct CodexProviderTests {
         #expect(credentials.resolvedLocators.isEmpty)
     }
 
+    @Test("a token-less credential file falls back to the root's Keychain account")
+    func unusableFileFallsBackToKeychain() async throws {
+        let descriptor = Self.keychainDescriptor(
+            root: ProviderFixtures.codexRoot,
+            identifier: "persistent-codex"
+        )
+        let credentials = SealedCredentialSource(
+            slots: [Self.keychainNamespace: [descriptor]]
+        )
+        let context = ProviderContext.sealed(
+            fileSystem: try fileSystem(auth: "codex-auth-no-tokens"),
+            credentials: credentials
+        )
+
+        let account = try #require(
+            try await CodexProvider().discoverAccounts(using: context).first
+        )
+
+        #expect(account.locator.kind == .keychain)
+        #expect(account.locator.identifier == "persistent-codex")
+        #expect(account.availability == .active)
+        #expect(credentials.enumeratedNamespaces == [Self.keychainNamespace])
+        #expect(credentials.resolvedLocators.isEmpty)
+    }
+
+    @Test("a token-less credential file stays visible when the Keychain has no fallback")
+    func unusableFileWithoutKeychainStaysUnavailable() async throws {
+        let (context, _, _) = try context(auth: "codex-auth-no-tokens")
+
+        let account = try #require(
+            try await CodexProvider().discoverAccounts(using: context).first
+        )
+
+        #expect(account.locator.kind == .file)
+        #expect(account.availability == .unavailable)
+    }
+
     @Test("fetch parses the Keychain auth document inside the credential operation")
     func fetchesWithKeychainCredential() async throws {
         let descriptor = Self.keychainDescriptor(

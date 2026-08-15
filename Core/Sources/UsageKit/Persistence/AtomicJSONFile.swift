@@ -10,11 +10,18 @@ public struct AtomicJSONFile<Value: Codable & Sendable>: Sendable {
 
     public func load(fileManager: FileManager = .default) throws -> Value? {
         guard fileManager.fileExists(atPath: url.path(percentEncoded: false)) else { return nil }
+        let data: Data
         do {
-            let data = try Data(contentsOf: url)
-            return try UsageJSON.decoder().decode(Value.self, from: data)
+            data = try Data(contentsOf: url)
         } catch {
             throw UsagePersistenceError.unavailable(operation: "read JSON state")
+        }
+        do {
+            return try UsageJSON.decoder().decode(Value.self, from: data)
+        } catch {
+            // Distinct from the read failure above: the bytes are there and unreadable, which is
+            // a corrupt document rather than a permissions or I/O problem.
+            throw UsagePersistenceError.unavailable(operation: "decode JSON state")
         }
     }
 

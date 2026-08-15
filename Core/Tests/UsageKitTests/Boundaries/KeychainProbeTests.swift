@@ -240,6 +240,9 @@ struct KeychainProbeTests {
             "KeychainProbeReport.swift",
             "KeychainDiagnoseCommand.swift",
             "KeychainDiagnostic.swift",
+            // Gate A of the Claude metering plan: its enumeration-only leg is deliberately the
+            // probe's production-shaped query, run per derived root service.
+            "ClaudeGateDiagnostics.swift",
         ]
         var scanned = 0
         var offenders: [String] = []

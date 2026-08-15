@@ -35,7 +35,7 @@ struct PopoverRoot: View {
 
             PopoverFooter(glass: glass, quit: quit)
         }
-        .padding(14)
+        .padding(10)
         .frame(width: PopoverOverviewLayout.width)
         // Once liquidity strips the window's stock glass frame, this rounded material is the
         // whole backdrop; it fades with the slider until only the glass islands remain over the

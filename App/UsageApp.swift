@@ -13,6 +13,9 @@ struct UsageApp: App {
             KeychainDiagnostic.run(invocation)
             exit(EXIT_SUCCESS)
         }
+        if let invocation = ClaudeGateDiagnostic.invocation(from: CommandLine.arguments) {
+            ClaudeGateDiagnostic.run(invocation)
+        }
         let model = AppModel.live()
         _model = State(initialValue: model)
         // A menu bar app has to refresh whether or not its popover is ever opened, so the first
@@ -25,7 +28,10 @@ struct UsageApp: App {
             PopoverRoot(lifecycle: lifecycle, model: model)
         } label: {
             MenuBarLabel(
-                remainingFraction: MenuBarLabel.leastRemainingFraction(in: model.store.accounts)
+                best: BestProviderUsage.select(
+                    accounts: model.store.accounts,
+                    registry: model.registry
+                )
             )
         }
         .menuBarExtraStyle(.window)

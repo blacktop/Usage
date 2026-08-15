@@ -55,20 +55,29 @@ struct AppModelTests {
         #expect(model.store.accounts.map(\.account.key) == first)
     }
 
-    @Test("The menu bar label reports the least capacity left across every account")
-    func menuBarLabelUsesLeastRemainingFraction() async throws {
+    @Test("The menu bar label names the provider with the most capacity left")
+    func menuBarLabelSelectsBestProvider() async throws {
         let model = model(UsageKit.PreviewProvider(), clock: GatedClock())
-        #expect(MenuBarLabel.leastRemainingFraction(in: model.store.accounts) == nil)
+        #expect(
+            BestProviderUsage.select(accounts: model.store.accounts, registry: model.registry)
+                == nil,
+            "before the first refresh there is nothing eligible and the label stays icon-only"
+        )
 
         await model.refreshNow()
 
-        let least = try #require(
-            MenuBarLabel.leastRemainingFraction(in: model.store.accounts)
+        let best = try #require(
+            BestProviderUsage.select(accounts: model.store.accounts, registry: model.registry)
         )
-        let everyFraction = model.store.accounts.compactMap(\.report).flatMap(\.windows)
-            .map(\.remainingFraction)
-        #expect(least == everyFraction.min())
-        #expect(least == 0, "an over-quota window has no remaining capacity")
+        #expect(best.providerID == PreviewProvider.id)
+        let bottleneck = try #require(
+            model.store.accounts.compactMap(\.report).flatMap(\.windows)
+                .map(\.remainingFraction).min()
+        )
+        #expect(
+            best.remainingFraction == bottleneck,
+            "the provider is ranked by its bottleneck window across every account"
+        )
     }
 
     @Test("A failed refresh leaves the previously rendered report in place")

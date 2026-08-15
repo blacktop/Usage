@@ -67,3 +67,7 @@ Config/Local.xcconfig
 build/
 .build/
 DerivedData/
+
+# The global gitignore's CLAUDE*.md pattern (agent instruction files) also swallows the Claude
+# provider contract on this case-insensitive filesystem; re-include it explicitly.
+!docs/providers/claude.md

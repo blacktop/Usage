@@ -17,27 +17,10 @@ extension ClaudeCredentialMetadata: ProviderCredentialMetadata {}
 
 /// Reader for Claude Code's credential document.
 enum ClaudeCredentialFile {
-    /// Claude Code's service for the default configuration directory.
-    static let keychainService = "Claude Code-credentials"
     /// Where the bearer token sits inside the document, for `CredentialSource` to resolve.
     static let secretPath = ["claudeAiOauth", "accessToken"]
     /// The one document Claude discovery reads, directly below a configured root.
     static let documentName = ".credentials.json"
-
-    /// Claude Code scopes an explicit `CLAUDE_CONFIG_DIR` to this service.
-    static func keychainService(root: URL) -> String {
-        "Claude Code-credentials-\(ProfileKeychainName.pathHash(root: root, length: 8))"
-    }
-
-    static func defaultRoot(homeDirectory: URL) -> URL {
-        homeDirectory.appending(path: ".claude", directoryHint: .isDirectory)
-    }
-
-    static func isDefaultRoot(_ root: URL, homeDirectory: URL) -> Bool {
-        root.standardizedFileURL.path(percentEncoded: false)
-            == defaultRoot(homeDirectory: homeDirectory)
-            .standardizedFileURL.path(percentEncoded: false)
-    }
 
     static func url(root: URL) -> URL {
         root.appending(path: documentName, directoryHint: .notDirectory)

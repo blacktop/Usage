@@ -6,4 +6,9 @@ ENABLE_TESTABILITY = NO
 ONLY_ACTIVE_ARCH = NO
 DEBUG_INFORMATION_FORMAT = dwarf-with-dsym
 
+// Development-signed builds otherwise inherit get-task-allow from the injected base
+// entitlements, which `just verify-security` rightly rejects: a debuggable process is not a
+// hardened one. Debug builds keep the injection so the debugger still attaches.
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
+
 #include? "Local.xcconfig"

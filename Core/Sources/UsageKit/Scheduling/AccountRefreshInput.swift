@@ -43,11 +43,15 @@ public struct AccountRefreshInput: Sendable, Hashable {
         return error.retry
     }
 
-    /// Whether the last failure was a local credential read — a locked keychain, or an item
-    /// rotated out from under the cached locator — that never produced a provider request.
-    /// These are free to retry, so they recover on the short cadence instead of the provider one.
+    /// Whether the last failure was a local credential read that a rediscovery can repair on its
+    /// own — the cached locator pointing at an item the agent has since rotated away.
+    ///
+    /// Deliberately not `.interactionRequired`: that failure means the read needs the user's
+    /// approval, its recovery is the explicit account action, and a background retry runs under
+    /// the same no-UI policy that just refused it. Retrying it faster only burns Keychain reads
+    /// on an outcome that cannot change until the user acts.
     var isCredentialRecovery: Bool {
         guard case .failure(let error) = outcome else { return false }
-        return error.category == .credentialUnavailable || error.category == .interactionRequired
+        return error.category == .credentialUnavailable
     }
 }

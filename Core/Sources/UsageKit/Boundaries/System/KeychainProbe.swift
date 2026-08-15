@@ -63,18 +63,16 @@ public struct KeychainPayloadOutcome: Sendable, Codable, Equatable {
 /// The Keychain feasibility gate's diagnostic probe.
 ///
 /// **This type exists only for the gate. No refresh, discovery, or provider path uses it.**
-/// `KeychainCredentialSource` remains the only production reader; it collapses every failure to
-/// "nothing is visible", which is the right answer for a refresh whose optional secondary source is
-/// locked, and useless as a measurement. The gate needs to tell "no items exist" from
-/// `errSecInteractionNotAllowed` from `errSecAuthFailed`, so it needs the `OSStatus` the production
-/// path throws away.
+/// Claude providers no longer use this source. The historical gate still needs to tell "no items
+/// exist" from `errSecInteractionNotAllowed` from `errSecAuthFailed`, so it preserves the
+/// diagnostic and the `OSStatus` a normal optional discovery path would throw away.
 ///
 /// Every query it sends is built by `KeychainCredentialSource` and policed by the same
 /// `KeychainNoUIPolicy`, so what the gate measures is what production sends. A gate that tested a
 /// query of its own shape would prove nothing about the production one.
 public struct KeychainProbe: Sendable {
-    /// The one service the gate is scoped to.
-    public static let claudeService = ClaudeCredentialFile.keychainService
+    /// The historical Claude Code service the diagnostic gate is scoped to.
+    public static let claudeService = "Claude Code-credentials"
 
     public init() {}
 

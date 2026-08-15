@@ -34,9 +34,19 @@ struct KeychainItemReference: Hashable, Sendable {
 public struct KeychainCredentialSource: CredentialSource {
     private let noUI = KeychainNoUIPolicy()
     private let allowsCredentialUI: Bool
+    private let suppressionAvailable: Bool
 
     public init(interaction: any InteractionPolicy = BackgroundInteractionPolicy()) {
+        self.init(
+            interaction: interaction,
+            suppressionAvailable: KeychainUserInteraction.isAvailable
+        )
+    }
+
+    /// Test seam for the process-wide suppression lever, which cannot be faked through dlsym.
+    init(interaction: any InteractionPolicy, suppressionAvailable: Bool) {
         allowsCredentialUI = interaction.allowsCredentialUI
+        self.suppressionAvailable = suppressionAvailable
     }
 
     /// Items visible under `namespace.identifier`, read as a Keychain service, newest first.
@@ -46,11 +56,7 @@ public struct KeychainCredentialSource: CredentialSource {
     /// enumeration because one optional secondary source is locked.
     public func slots(in namespace: CredentialLocator) async throws -> [CredentialSlotDescriptor] {
         guard namespace.kind == .keychain else { return [] }
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(
-            policed(Self.enumerationQuery(service: namespace.identifier)) as CFDictionary,
-            &result
-        )
+        let (status, result) = copyMatching(Self.enumerationQuery(service: namespace.identifier))
         guard status == errSecSuccess, let items = result as? [[String: Any]] else { return [] }
         return
             items
@@ -83,12 +89,31 @@ public struct KeychainCredentialSource: CredentialSource {
         allowsCredentialUI ? query : noUI.applied(to: query)
     }
 
+    /// One policed query, run with dialogs suppressed unless this source is the explicit approval
+    /// path.
+    ///
+    /// The suppression is here rather than in `policed(_:)` because it is not a query attribute:
+    /// `KeychainNoUIPolicy`'s markers travel with the dictionary, while the file-based keychain's
+    /// dialog is governed by process state that has to be set and restored around the call.
+    private func copyMatching(_ query: [String: Any]) -> (status: OSStatus, value: CFTypeRef?) {
+        let policedQuery = policed(query)
+        let run = {
+            var result: CFTypeRef?
+            let status = SecItemCopyMatching(policedQuery as CFDictionary, &result)
+            return (status: status, value: result)
+        }
+        guard !allowsCredentialUI else { return run() }
+        // Without the process-wide lever, "suppressed" would run unsuppressed and a background
+        // query could raise the file-based keychain's dialog anyway. Failing closed here keeps
+        // the no-prompt guarantee structural: the caller sees the same interaction-required
+        // outcome the no-UI markers would have produced, and the explicit approval path — which
+        // permits UI — is unaffected.
+        guard suppressionAvailable else { return (errSecInteractionNotAllowed, nil) }
+        return KeychainUserInteraction.suppressed(run)
+    }
+
     private func payload(for reference: KeychainItemReference) throws(UsageError) -> Data {
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(
-            policed(Self.payloadQuery(reference: reference)) as CFDictionary,
-            &result
-        )
+        let (status, result) = copyMatching(Self.payloadQuery(reference: reference))
         switch status {
         case errSecSuccess:
             guard let data = result as? Data, !data.isEmpty else {
