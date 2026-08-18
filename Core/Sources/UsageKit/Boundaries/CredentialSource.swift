@@ -110,6 +110,26 @@ public struct Credential: CustomStringConvertible, CustomDebugStringConvertible 
     public var description: String { "Credential(redacted)" }
     public var debugDescription: String { description }
 
+    /// Hands a redacted derivation of the credential document to a Usage-owned store.
+    ///
+    /// This is the one deliberate, reviewed path by which secret-derived bytes leave a credential
+    /// operation — and they leave it only into another credential store, never to the caller: the
+    /// derivation travels straight from `redacting` into `store`, and the return is `Void`. It
+    /// exists so a provider can keep a last-good copy of a credential another agent owns, whose
+    /// item that agent recreates in ways that void Usage's read approval.
+    ///
+    /// Best-effort by design: a failed mirror write must not fail the successful fetch it rides
+    /// on, and UsageKit deliberately has no logging surface to report it to, so the error is
+    /// dropped and the next success retries.
+    func persistRedactedCopy(
+        into store: any ManagedCredentialStore,
+        at locator: CredentialLocator,
+        redacting: (Data) -> String?
+    ) {
+        guard let document, let payload = redacting(document) else { return }
+        try? store.storeCredential(payload, at: locator)
+    }
+
     /// Parses non-secret provider metadata while the credential document remains operation-scoped.
     ///
     /// The marker protocol is internal, so downstream code cannot add a secret-carrying result type

@@ -13,6 +13,7 @@ struct ProviderAccountIssues: View {
                     ProviderErrorRow(
                         account: account,
                         error: error,
+                        retryAt: issue.retryAt,
                         retry: { onRetry(state.account.key, error.requiresCredentialApproval) }
                     )
                 }
@@ -27,6 +28,12 @@ struct ProviderAccountIssues: View {
 struct ProviderAccountIssuePresentation {
     let error: UsageError?
     let notice: String?
+    /// When the provider's `Retry-After` lapses, measured from the attempt that carried it.
+    ///
+    /// Rendered so a rate-limited card explains why nothing — the scheduler, the Retry button,
+    /// a forced re-approval — will touch the endpoint before this instant. Without it, honoring
+    /// the cooldown reads as the app silently ignoring the user.
+    let retryAt: Date?
 
     init(account: ProviderUsagePresentation.Account) {
         let lastError = account.state?.lastError
@@ -35,6 +42,11 @@ struct ProviderAccountIssuePresentation {
         // hammer the endpoint ahead of the scheduler's backoff.
         let throttled = lastError?.category == .rateLimited
         error = lastError
+        if let retry = lastError?.retry, let attemptAt = account.state?.lastAttemptAt {
+            retryAt = attemptAt.addingTimeInterval(Double(retry.delay.components.seconds))
+        } else {
+            retryAt = nil
+        }
         if throttled {
             notice = nil
         } else if account.state?.report?.isPartial == true {
@@ -55,6 +67,7 @@ struct ProviderAccountIssuePresentation {
 private struct ProviderErrorRow: View {
     let account: ProviderUsagePresentation.Account
     let error: UsageError
+    let retryAt: Date?
     let retry: () -> Void
 
     var body: some View {
@@ -68,6 +81,12 @@ private struct ProviderErrorRow: View {
                     .font(.caption2)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
+                if error.category == .rateLimited, let retryAt {
+                    let time = retryAt.formatted(date: .omitted, time: .shortened)
+                    Text("Retries automatically at \(time).")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 if let action = error.reauthentication {
                     Text(action.summary)
                         .font(.caption2)

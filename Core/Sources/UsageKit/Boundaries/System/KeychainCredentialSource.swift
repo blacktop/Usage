@@ -113,6 +113,9 @@ public struct KeychainCredentialSource: CredentialSource {
     }
 
     private func payload(for reference: KeychainItemReference) throws(UsageError) -> Data {
+        if !allowsCredentialUI {
+            try preflight(reference)
+        }
         let (status, result) = copyMatching(Self.payloadQuery(reference: reference))
         switch status {
         case errSecSuccess:
@@ -122,6 +125,33 @@ public struct KeychainCredentialSource: CredentialSource {
             return data
         default:
             throw Self.failure(for: status)
+        }
+    }
+
+    /// Refuses the payload query up front when the row's own ACL says it would be denied.
+    ///
+    /// An attributes-and-reference query never raises the file-based keychain's dialog, and the
+    /// row's decrypt ACL names exactly who may read the payload without one. Judging that before
+    /// the data query means a background refresh whose build the ACL does not trust reports
+    /// `.interactionRequired` without spending a denied read — and, on configurations where the
+    /// suppression lever is imperfect, without ever constructing the query that could prompt.
+    /// An undetermined judgement falls through to the suppressed read, which stays fail-closed.
+    private func preflight(_ reference: KeychainItemReference) throws(UsageError) {
+        let (status, result) = copyMatching(Self.preflightQuery(reference: reference))
+        switch status {
+        case errSecSuccess:
+            guard let attributes = result as? [String: Any],
+                let item = attributes[kSecValueRef as String]
+            else { return }
+            if KeychainACLPreflight.check(item: item as AnyObject) == .interactionRequired {
+                throw UsageError.interactionForbidden()
+            }
+        case errSecItemNotFound:
+            throw UsageError.credentialUnavailable(kind: .keychain)
+        case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
+            throw Self.failure(for: status)
+        default:
+            return
         }
     }
 
@@ -150,6 +180,18 @@ public struct KeychainCredentialSource: CredentialSource {
             kSecMatchLimit as String: kSecMatchLimitAll,
             kSecReturnAttributes as String: true,
             kSecReturnPersistentRef as String: true,
+        ]
+    }
+
+    /// Attributes and the item reference for one row — everything the ACL judgement needs, and
+    /// deliberately not `kSecReturnData`, so this query cannot be made to prompt for a secret.
+    static func preflightQuery(reference: KeychainItemReference) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecValuePersistentRef as String: reference.data,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnAttributes as String: true,
+            kSecReturnRef as String: true,
         ]
     }
 

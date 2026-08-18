@@ -7,7 +7,10 @@ import UsageKit
 @Suite("Issue presentation and meter severity")
 @MainActor
 struct ProviderIssueSeverityTests {
-    private func account(lastError: UsageError?) -> ProviderUsagePresentation.Account {
+    private func account(
+        lastError: UsageError?,
+        lastAttemptAt: Date? = nil
+    ) -> ProviderUsagePresentation.Account {
         let id = ProviderID("claude")
         let key = AccountKey(providerID: id, accountID: .canonical(provider: id, canonicalID: "a"))
         return ProviderUsagePresentation.Account(
@@ -22,7 +25,8 @@ struct ProviderIssueSeverityTests {
                     displayName: "Claude",
                     availability: .active
                 ),
-                lastError: lastError
+                lastError: lastError,
+                lastAttemptAt: lastAttemptAt
             ),
             configuredProfile: nil
         )
@@ -36,6 +40,33 @@ struct ProviderIssueSeverityTests {
         )
         #expect(issue.error == throttled)
         #expect(issue.notice == nil)
+    }
+
+    @Test("a Retry-After becomes a visible retry instant, measured from the attempt")
+    func retryAdviceBecomesRetryInstant() {
+        let attemptAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let throttled = UsageError(
+            category: .rateLimited,
+            reason: .httpStatus(code: 429),
+            retry: UsageError.RetryAdvice(delay: .seconds(900))
+        )
+
+        let issue = ProviderAccountIssuePresentation(
+            account: account(lastError: throttled, lastAttemptAt: attemptAt)
+        )
+
+        #expect(issue.retryAt == attemptAt.addingTimeInterval(900))
+    }
+
+    @Test("an error without retry advice offers no retry instant")
+    func noRetryAdviceMeansNoInstant() {
+        let issue = ProviderAccountIssuePresentation(
+            account: account(
+                lastError: .transportFailure(),
+                lastAttemptAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        )
+        #expect(issue.retryAt == nil)
     }
 
     @Test("failures that need the user keep the error row")

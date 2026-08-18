@@ -8,6 +8,10 @@ public struct AccountProjection: Sendable, Hashable, Identifiable {
     public let profileRootIDs: [ProfileRootID]
     public let displayName: String?
     public let availability: ProviderAccount.Availability
+    /// The credential backends behind those slots. Kinds only — a kind is one of four generic
+    /// words, so nothing here weakens the projection's locator-free construction. The UI uses it
+    /// to offer credential-specific recovery, such as re-approving a Keychain read grant.
+    public let credentialKinds: Set<CredentialLocator.Kind>
 
     public var id: AccountKey { key }
 
@@ -16,13 +20,15 @@ public struct AccountProjection: Sendable, Hashable, Identifiable {
         slots: [CredentialSlotID],
         profileRootIDs: [ProfileRootID] = [],
         displayName: String?,
-        availability: ProviderAccount.Availability
+        availability: ProviderAccount.Availability,
+        credentialKinds: Set<CredentialLocator.Kind> = []
     ) {
         self.key = key
         self.slots = slots
         self.profileRootIDs = profileRootIDs
         self.displayName = displayName
         self.availability = availability
+        self.credentialKinds = credentialKinds
     }
 
     /// Re-keys a projection onto the identity that superseded it.
@@ -32,7 +38,8 @@ public struct AccountProjection: Sendable, Hashable, Identifiable {
             slots: slots,
             profileRootIDs: profileRootIDs,
             displayName: displayName,
-            availability: availability
+            availability: availability,
+            credentialKinds: credentialKinds
         )
     }
 
@@ -43,7 +50,8 @@ public struct AccountProjection: Sendable, Hashable, Identifiable {
             slots: Self.uniqued(slots + other.slots),
             profileRootIDs: Self.uniqued(profileRootIDs + other.profileRootIDs),
             displayName: displayName ?? other.displayName,
-            availability: Self.mostAvailable(availability, other.availability)
+            availability: Self.mostAvailable(availability, other.availability),
+            credentialKinds: credentialKinds.union(other.credentialKinds)
         )
     }
 
@@ -88,7 +96,8 @@ extension IdentityReconciler {
                 profileRootIDs: AccountProjection.uniqued(members.compactMap(\.profileRootID)),
                 displayName: members.compactMap(\.displayName).first,
                 availability: members.map(\.availability)
-                    .reduce(.unavailable, AccountProjection.mostAvailable)
+                    .reduce(.unavailable, AccountProjection.mostAvailable),
+                credentialKinds: Set(members.map(\.locator.kind))
             )
         }
     }

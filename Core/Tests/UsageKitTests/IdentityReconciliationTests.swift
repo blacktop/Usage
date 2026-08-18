@@ -45,6 +45,32 @@ struct IdentityReconciliationTests {
         #expect(projections[0].availability == .active)
     }
 
+    @Test("A projection records its members' credential backends as kinds only")
+    func projectionCarriesCredentialKinds() {
+        let reconciler = IdentityReconciler()
+        let projections = reconciler.project([
+            Fixtures.account(key: Fixtures.canonicalKey("one"), slot: Fixtures.slot("one"))
+        ])
+        #expect(projections.first?.credentialKinds == [.keychain])
+
+        let merged = AccountProjection(
+            key: Fixtures.canonicalKey("one"),
+            slots: [Fixtures.slot("one")],
+            displayName: nil,
+            availability: .active,
+            credentialKinds: [.keychain]
+        ).merging(
+            AccountProjection(
+                key: Fixtures.canonicalKey("one"),
+                slots: [Fixtures.slot("two")],
+                displayName: nil,
+                availability: .active,
+                credentialKinds: [.file]
+            )
+        )
+        #expect(merged.credentialKinds == [.keychain, .file])
+    }
+
     @Test("Two accounts with the same display email stay separate")
     func equalDisplayEmailsDoNotMerge() {
         let reconciler = IdentityReconciler()

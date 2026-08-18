@@ -45,6 +45,20 @@ struct ProviderUsagePresentation {
     let windowGroups: [WindowGroup]
     let credits: [Credit]
 
+    /// Accounts backed by another agent's Keychain row, paired with the key an approval targets.
+    ///
+    /// These are the credentials whose read grant can silently die under a healthy-looking card:
+    /// stale-while-revalidate keeps the last report visible and the mirror keeps fresh data
+    /// flowing, so the user needs a way to force a re-approval that no error row is offering.
+    var reapprovableAccounts: [(key: AccountKey, account: Account)] {
+        accounts.compactMap { account in
+            guard case .discovered(let key) = account.id,
+                account.state?.account.credentialKinds.contains(.keychain) == true
+            else { return nil }
+            return (key, account)
+        }
+    }
+
     init(section: PopoverAccountSection) {
         let discovered = section.accounts.enumerated().map { index, state in
             Account(

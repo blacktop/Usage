@@ -186,7 +186,8 @@ extension ProviderContext {
         http: any HTTPTransport = RefusingHTTPTransport(),
         clock: ManualClock = ManualClock(),
         interaction: any InteractionPolicy = BackgroundInteractionPolicy(),
-        profileRoots: (any ProfileRootStore)? = nil
+        profileRoots: (any ProfileRootStore)? = nil,
+        managedCredentials: (any ManagedCredentialStore)? = nil
     ) -> ProviderContext {
         ProviderContext(
             http: http,
@@ -194,7 +195,8 @@ extension ProviderContext {
             fileSystem: fileSystem,
             clock: clock,
             interaction: interaction,
-            profileRoots: profileRoots
+            profileRoots: profileRoots,
+            managedCredentials: managedCredentials
         )
     }
 }

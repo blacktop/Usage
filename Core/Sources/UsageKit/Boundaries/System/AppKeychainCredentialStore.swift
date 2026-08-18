@@ -77,12 +77,24 @@ public struct AppKeychainCredentialStore: CredentialSource, ManagedCredentialSto
         )
         switch status {
         case errSecSuccess:
-            guard let payload = result as? Data,
-                let secret = String(data: payload, encoding: .utf8)?.trimmedNonEmpty
-            else {
+            guard let payload = result as? Data else {
                 throw UsageError.credentialUnavailable(kind: .appKeychain)
             }
-            return try await operation(Credential(secret: secret))
+            // A one-component path names a bare secret. Further components address the secret
+            // inside a stored document, mirroring how `.keychain` locators are resolved, so a
+            // Usage-owned copy of a document credential reads through the same machinery as the
+            // original.
+            let documentPath = Array(locator.path.dropFirst())
+            guard !documentPath.isEmpty else {
+                guard let secret = String(data: payload, encoding: .utf8)?.trimmedNonEmpty else {
+                    throw UsageError.credentialUnavailable(kind: .appKeychain)
+                }
+                return try await operation(Credential(secret: secret))
+            }
+            let secret = try CredentialDocument.secret(
+                in: payload, at: documentPath, kind: .appKeychain
+            )
+            return try await operation(Credential(secret: secret, document: payload))
         case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
             throw UsageError.interactionForbidden()
         default:
@@ -201,12 +213,14 @@ public struct AppKeychainCredentialStore: CredentialSource, ManagedCredentialSto
         return KeychainUserInteraction.suppressed(operation)
     }
 
+    /// The Keychain row a locator names: its service, and its account from the path's first
+    /// component. Later components address inside the payload and are not part of the row.
     private static func address(
         _ locator: CredentialLocator
     ) -> (
         service: String, account: String
     )? {
-        guard locator.kind == .appKeychain, locator.path.count == 1,
+        guard locator.kind == .appKeychain,
             let service = singleLine(locator.identifier),
             let account = locator.path.first.flatMap(singleLine)
         else { return nil }

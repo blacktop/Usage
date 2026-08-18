@@ -271,6 +271,30 @@ required, and an unavailable suppression lever fails background reads closed rat
 unsuppressed. Re-run both gates after any signing-identity change, appending new rows rather than
 editing these.
 
+## 2026-08-16: ACL preflight, fetch-time re-addressing, and the redacted mirror
+
+Claude Code recreated its plain `Claude Code-credentials` item on 2026-08-15 (observed via `cdat`),
+which voids the per-item "Always Allow" grant and produced the recurring re-approval reports.
+Three changes, modelled on CodexBar's keychain handling, absorb that behaviour:
+
+1. **ACL preflight** (`KeychainACLPreflight`): background payload reads first judge the row's
+   decrypt ACL — attributes-only, incapable of prompting — and skip the payload query entirely
+   when it is provably going to be refused. The suppressed fail-closed read remains for the
+   undetermined case.
+2. **Fetch-time re-addressing** (`ClaudeProvider.freshKeychainLocator`): keychain fetches
+   re-resolve the newest row of the root's service, so a recreated item heals in the same wave
+   instead of failing once on the dangling persistent reference.
+3. **Redacted credential mirror** (`ClaudeCredentialMirror`, service
+   `io.blacktop.Usage.claude-mirror`): after a 2xx keychain-backed fetch the app stores a
+   redacted copy — access token and plan fields, never the refresh token — in a Usage-owned item,
+   and a fetch blocked by a voided grant serves full-resolution data from that copy until the
+   provider rejects its token, at which point the copy is deleted and the approval error
+   surfaces. This is a deliberate, documented exception to the earlier "no write surface"
+   posture: the write is into Usage's own service only, through the one reviewed
+   `Credential.persistRedactedCopy` escape. The CLI's context carries no mirror store — the app
+   and CLI are distinct code identities, and either one's mirror rows would be approval-gated
+   for the other.
+
 **2026-08-14, later the same day:** the bundle identifier moved from `dev.blacktop.Usage` to
 `io.blacktop.Usage` and the app adopted Hardened Runtime, arm64e, and the Enhanced Security
 hard-mode entitlements (`just verify-security` audits all of it). The identifier is part of the

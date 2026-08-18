@@ -125,6 +125,18 @@ extension RefreshCoordinator {
             await sink.receive(.scheduled(key: key))
             return
         }
+        // A `Retry-After` is the provider's instruction, and the approval fetch runs inside the
+        // one authorized read. Spending that read on a request the provider has already refused
+        // would burn a one-time "Allow" on a doomed fetch and walk past the cooldown that manual
+        // refresh and wake already respect. The approval waits the cooldown out instead.
+        let now = clock.now
+        let earliest = clamped(now, for: key, state: state)
+        guard earliest <= now else {
+            state.dueAt = earliest
+            states[key] = state
+            await sink.receive(.scheduled(key: key))
+            return
+        }
         state.isInFlight = true
         states[key] = state
         await sink.receive(.began(key: key, at: clock.now))
@@ -135,7 +147,8 @@ extension RefreshCoordinator {
             fileSystem: context.fileSystem,
             clock: context.clock,
             interaction: UserInitiatedInteractionPolicy(),
-            profileRoots: context.profileRoots
+            profileRoots: context.profileRoots,
+            managedCredentials: context.managedCredentials
         )
         let result = await Self.fetch(state.account, from: provider, using: interactiveContext)
         await complete(result)

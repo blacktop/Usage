@@ -60,6 +60,29 @@ struct ProviderUsageCard: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // The forced path to the approval dialog. The error row's Approve button exists only
+        // while a failure is showing; a dead grant hiding behind cached or mirrored data has no
+        // error row, and right-clicking the card is how the user reaches the dialog anyway.
+        // During a provider-mandated cooldown the entry is disabled and says why: the
+        // coordinator would defer the request anyway, and a menu item that silently does
+        // nothing reads as broken. `Date()` is sampled when the menu opens, which is the
+        // user-initiated instant the comparison is about.
+        .contextMenu {
+            ForEach(presentation.reapprovableAccounts, id: \.account.id) { entry in
+                let retryAt = ProviderAccountIssuePresentation(account: entry.account).retryAt
+                if let retryAt, retryAt > Date() {
+                    Button(
+                        "Rate limited — retries at "
+                            + "\(retryAt.formatted(date: .omitted, time: .shortened))"
+                    ) {}
+                    .disabled(true)
+                } else {
+                    Button("Re-approve Keychain access for \(entry.account.label)…") {
+                        onRetry(entry.key, true)
+                    }
+                }
+            }
+        }
         .accessibilityIdentifier("provider-card-\(section.id.rawValue)")
     }
 }

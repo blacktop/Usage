@@ -162,6 +162,30 @@ struct RefreshCoordinatorTests {
         #expect(!(await coordinator.hasScheduler))
     }
 
+    @Test("credential approval cannot walk past a Retry-After cooldown")
+    func credentialApprovalRespectsCooldown() async throws {
+        let provider = StubProvider(accountIDs: ["a"])
+        provider.fail("a", with: rateLimited(scope: .account))
+        let account = try #require(provider.accounts.first)
+        let interactiveCredentials = InMemoryCredentialSource(
+            secrets: [account.locator: "FAKE-access-token-0000"],
+            interaction: UserInitiatedInteractionPolicy()
+        )
+        let log = EventLog()
+        let coordinator = coordinator([provider], clock: GatedClock(), sink: log)
+        await coordinator.refresh()
+
+        await coordinator.approveCredentialAccess(
+            for: account.key,
+            using: interactiveCredentials
+        )
+
+        #expect(provider.fetchCount("a") == 1, "the doomed request was never sent")
+        #expect(interactiveCredentials.resolvedLocators.isEmpty)
+        #expect(await log.events.last == .scheduled(key: account.key))
+        await coordinator.suspend()
+    }
+
     @Test("An account-scoped 429 delays only that account")
     func accountScopedRateLimitIsNotContagious() async throws {
         let provider = StubProvider(accountIDs: ["a", "b"])

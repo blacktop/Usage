@@ -36,6 +36,7 @@ final class AppModel {
         registry: ProviderRegistry,
         context: ProviderContext,
         interactiveCredentials: (any CredentialSource)? = nil,
+        credentialAlerts: (any CredentialApprovalPresenter)? = nil,
         configuration: RefreshCoordinator.Configuration = RefreshCoordinator.Configuration()
     ) {
         let store = UsageStore()
@@ -44,10 +45,18 @@ final class AppModel {
         profileRoots = context.profileRoots
         fileSystem = context.fileSystem
         self.interactiveCredentials = interactiveCredentials ?? context.credentials
+        let sink: any RefreshEventSink
+        if let credentialAlerts {
+            sink = RefreshEventFanOut(
+                sinks: [store, CredentialApprovalNotifier(presenter: credentialAlerts)]
+            )
+        } else {
+            sink = store
+        }
         coordinator = RefreshCoordinator(
             registry: registry,
             context: context,
-            sink: store,
+            sink: sink,
             configuration: configuration
         )
     }
@@ -58,14 +67,17 @@ final class AppModel {
     /// No `PreviewProvider`: its three synthetic accounts belong to the suites that exercise the
     /// store and the popover, not to a shipped menu bar showing a user their real quota.
     static func live() -> AppModel {
-        let context = ProviderContext.system()
+        // The mirror store lives only in the app's context: the CLI is a second code identity
+        // whose mirror rows the app could never read silently, so it neither writes nor reads any.
+        let context = ProviderContext.system(managedCredentials: AppKeychainCredentialStore())
         return AppModel(
             registry: .agents,
             context: context,
             interactiveCredentials: SystemCredentialSource(
                 fileSystem: context.fileSystem,
                 interaction: UserInitiatedInteractionPolicy()
-            )
+            ),
+            credentialAlerts: UserNotificationApprovalPresenter()
         )
     }
 

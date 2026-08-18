@@ -500,12 +500,15 @@ struct ProfileSettingsModelTests {
         #expect(await harness.store.saveCount == 0, "tokens never enter profile preferences")
     }
 
-    @Test("Removing a Claude root also removes its Usage-owned setup token")
+    @Test("Removing a Claude root also removes its Usage-owned setup token and mirror")
     func removingRootRemovesSetupToken() async throws {
         let stored = try collection(["/Users/fixture/profiles/work"])
         let id = try #require(stored.profiles.first).id
         let tokenStore = InMemoryManagedCredentialStore(
-            locators: [ClaudeSetupTokenCredential.locator(for: id)]
+            locators: [
+                ClaudeSetupTokenCredential.locator(for: id),
+                ClaudeCredentialMirror.storageLocator(for: id),
+            ]
         )
         let harness = Harness(collection: stored, managedCredentials: tokenStore)
         await harness.settings.load()
@@ -520,7 +523,12 @@ struct ProfileSettingsModelTests {
                 at: ClaudeSetupTokenCredential.locator(for: id)
             )
         )
-        #expect(tokenStore.removalCount == 1)
+        #expect(
+            !tokenStore.containsCredential(
+                at: ClaudeCredentialMirror.storageLocator(for: id)
+            )
+        )
+        #expect(tokenStore.removalCount == 2)
     }
 
     @Test("A failed Claude token cleanup leaves the same root available for retry")

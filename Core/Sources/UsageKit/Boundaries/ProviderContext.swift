@@ -12,6 +12,13 @@ public struct ProviderContext: Sendable {
     public let interaction: any InteractionPolicy
     /// The configured configuration roots, which are the only source account discovery has.
     public let profileRoots: any ProfileRootStore
+    /// The Usage-owned store a provider may mirror a last-good credential into, or `nil` where
+    /// mirroring is not configured.
+    ///
+    /// `nil` for the CLI on purpose: the app and the CLI are two code identities, and an item
+    /// either one created is approval-gated for the other — a CLI-written mirror would be a row
+    /// the app can never read silently.
+    public let managedCredentials: (any ManagedCredentialStore)?
 
     /// Builds a context, defaulting the root store to the seeded roots under the injected home.
     ///
@@ -25,7 +32,8 @@ public struct ProviderContext: Sendable {
         fileSystem: any ProviderFileSystem,
         clock: any UsageClock,
         interaction: any InteractionPolicy,
-        profileRoots: (any ProfileRootStore)? = nil
+        profileRoots: (any ProfileRootStore)? = nil,
+        managedCredentials: (any ManagedCredentialStore)? = nil
     ) {
         self.http = http
         self.credentials = credentials
@@ -34,6 +42,7 @@ public struct ProviderContext: Sendable {
         self.interaction = interaction
         self.profileRoots =
             profileRoots ?? InMemoryProfileRootStore(homeDirectory: fileSystem.homeDirectory)
+        self.managedCredentials = managedCredentials
     }
 
     /// The context the app's scheduled refreshes and the whole CLI run under.
@@ -42,7 +51,8 @@ public struct ProviderContext: Sendable {
     /// terminal is still not a place to raise a Keychain dialog. Only an explicit account approval
     /// action passes a policy that allows one.
     public static func system(
-        interaction: any InteractionPolicy = BackgroundInteractionPolicy()
+        interaction: any InteractionPolicy = BackgroundInteractionPolicy(),
+        managedCredentials: (any ManagedCredentialStore)? = nil
     ) -> ProviderContext {
         let fileSystem = SystemFileSystem()
         return ProviderContext(
@@ -51,7 +61,8 @@ public struct ProviderContext: Sendable {
             fileSystem: fileSystem,
             clock: SystemClock(),
             interaction: interaction,
-            profileRoots: UserDefaultsProfileRootStore(homeDirectory: fileSystem.homeDirectory)
+            profileRoots: UserDefaultsProfileRootStore(homeDirectory: fileSystem.homeDirectory),
+            managedCredentials: managedCredentials
         )
     }
 }

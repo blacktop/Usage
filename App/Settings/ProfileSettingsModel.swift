@@ -253,6 +253,9 @@ final class ProfileSettingsModel {
                 try managedCredentials.removeCredential(
                     at: ClaudeSetupTokenCredential.locator(for: removed.id)
                 )
+                try managedCredentials.removeCredential(
+                    at: ClaudeCredentialMirror.storageLocator(for: removed.id)
+                )
             } catch {
                 errorMessage = Self.message(for: error)
                 return

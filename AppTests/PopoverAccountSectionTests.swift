@@ -187,6 +187,51 @@ struct PopoverAccountSectionTests {
         #expect(presentation.discoveredAccountCount == 2)
     }
 
+    @Test("Only keychain-backed discovered accounts offer forced re-approval")
+    func reapprovableAccountsFilterByBackend() throws {
+        let keychainKey = AccountKey(
+            providerID: CodexProvider.id,
+            accountID: .canonical(provider: CodexProvider.id, canonicalID: "keychain")
+        )
+        let keychainState = AccountState(
+            account: AccountProjection(
+                key: keychainKey,
+                slots: [CredentialSlotID(source: "keychain", opaqueID: "keychain")],
+                displayName: "Claude DDB",
+                availability: .active,
+                credentialKinds: [.keychain]
+            )
+        )
+        let fileState = AccountState(
+            account: AccountProjection(
+                key: AccountKey(
+                    providerID: CodexProvider.id,
+                    accountID: .canonical(provider: CodexProvider.id, canonicalID: "file")
+                ),
+                slots: [CredentialSlotID(source: "file", opaqueID: "file")],
+                displayName: "Claude",
+                availability: .active,
+                credentialKinds: [.file]
+            )
+        )
+        let presentation = ProviderUsagePresentation(
+            section: PopoverAccountSection(
+                id: CodexProvider.id,
+                displayName: "Claude",
+                accounts: [keychainState, fileState],
+                unrepresentedProfiles: [
+                    try ConfiguredProfileStatus(
+                        profile: profile(label: "Pending", suffix: "pending"),
+                        hasCredentialDocument: false
+                    )
+                ]
+            )
+        )
+
+        #expect(presentation.reapprovableAccounts.map(\.key) == [keychainKey])
+        #expect(presentation.reapprovableAccounts.first?.account.label == "Claude DDB")
+    }
+
     @Test("A partial cached report keeps its warning when a later refresh fails")
     func partialReportWarningSurvivesRefreshFailure() throws {
         let weeklyID = WindowID(scope: .plan, slot: .primary, period: .weekly)

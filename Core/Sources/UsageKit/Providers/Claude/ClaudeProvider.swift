@@ -3,12 +3,17 @@ import Foundation
 /// Claude / Claude Code, read through each configured root's credential file, Claude Code's own
 /// root-scoped Keychain item, or a Usage setup token — in that order.
 ///
-/// Read-only: Usage never refreshes the OAuth token, never writes the credential file, and never
-/// writes, updates, or deletes Claude Code's Keychain item. The Keychain tier addresses only the
-/// default root's plain service or a custom root's hashed service (`ClaudeCodeKeychain`), confirmed
-/// by the Gate A diagnostic. A setup token is written only by an explicit Settings action into a
-/// Usage-owned item and is resolved through the same operation-scoped boundary as every other
-/// credential.
+/// Read-only towards Claude Code: Usage never refreshes the OAuth token, never writes the
+/// credential file, and never writes, updates, or deletes Claude Code's Keychain item. The
+/// Keychain tier addresses only the default root's plain service or a custom root's hashed
+/// service (`ClaudeCodeKeychain`), confirmed by the Gate A diagnostic. A setup token is written
+/// only by an explicit Settings action into a Usage-owned item and is resolved through the same
+/// operation-scoped boundary as every other credential.
+///
+/// The one write Usage performs is into its own Keychain: after a successful keychain-backed
+/// fetch, a redacted copy of the credential (`ClaudeCredentialMirror` — access token and plan
+/// fields, never the refresh token) is stored under Usage's own service, and a fetch blocked by
+/// a voided read approval falls back to that copy until its token expires.
 public struct ClaudeProvider: Provider {
     public static let id = ProviderID("claude")
 
@@ -80,7 +85,7 @@ public struct ClaudeProvider: Provider {
         do {
             return try await fetch(for: account, using: context)
         } catch {
-            throw Self.annotated(error, for: account.locator)
+            throw await Self.annotated(error, for: account, using: context)
         }
     }
 
@@ -91,7 +96,30 @@ public struct ClaudeProvider: Provider {
         if account.locator.kind == .appKeychain {
             return try await fetchSetupTokenUsage(for: account, using: context)
         }
-        let result = try await context.credentials.withCredential(at: account.locator) {
+        let locator = await Self.freshKeychainLocator(for: account, using: context)
+        let mirror = Self.mirrorAddress(for: account, using: context)
+        do {
+            return try await fetchOAuthUsage(
+                at: locator, for: account, using: context, mirrorTo: mirror
+            )
+        } catch let error as UsageError where error.requiresCredentialApproval {
+            // Background refreshes soften a voided grant with the mirror. An explicit approval
+            // read must not: the user was just shown the dialog, and masking a denial with
+            // yesterday's copy would report an approval that did not happen.
+            guard let mirror, !context.interaction.allowsCredentialUI else { throw error }
+            return try await mirrorFallback(
+                mirror, for: account, using: context, blockedBy: error
+            )
+        }
+    }
+
+    private func fetchOAuthUsage(
+        at locator: CredentialLocator,
+        for account: ProviderAccount,
+        using context: ProviderContext,
+        mirrorTo mirror: MirrorAddress?
+    ) async throws -> UsageReport {
+        let result = try await context.credentials.withCredential(at: locator) {
             credential in
             let metadata =
                 try credential.metadata {
@@ -101,6 +129,15 @@ public struct ClaudeProvider: Provider {
             let response = try await context.http.send(
                 credential.authorizing(Self.usageRequest(), with: .bearer)
             )
+            // A 2xx proves the token, and only a proven token is worth copying. The redaction
+            // drops the refresh token before anything reaches the Usage-owned row.
+            if response.isSuccess, let mirror, let store = context.managedCredentials {
+                credential.persistRedactedCopy(
+                    into: store,
+                    at: mirror.storage,
+                    redacting: ClaudeCredentialMirror.payload(from:)
+                )
+            }
             return CredentialOperationResponse(response: response, metadata: metadata)
         }
         guard result.response.isSuccess else {
@@ -112,6 +149,59 @@ public struct ClaudeProvider: Provider {
             plan: result.metadata?.planLabel,
             capturedAt: context.clock.now
         )
+    }
+
+    /// Where this account's mirror lives, or `nil` when mirroring is off for this fetch.
+    ///
+    /// Only Claude Code keychain rows are mirrored — a credential file cannot lose an ACL grant —
+    /// and only when the context carries the Usage-owned store, which the CLI's never does.
+    private struct MirrorAddress {
+        let read: CredentialLocator
+        let storage: CredentialLocator
+    }
+
+    private static func mirrorAddress(
+        for account: ProviderAccount,
+        using context: ProviderContext
+    ) -> MirrorAddress? {
+        guard account.locator.kind == .keychain,
+            context.managedCredentials != nil,
+            let rootID = account.profileRootID
+        else { return nil }
+        return MirrorAddress(
+            read: ClaudeCredentialMirror.locator(for: rootID),
+            storage: ClaudeCredentialMirror.storageLocator(for: rootID)
+        )
+    }
+
+    /// One fetch through the mirrored copy, tried only after the real row needed approval.
+    ///
+    /// The mirror can only ever soften that failure, not change its story: an absent or
+    /// unreadable mirror re-throws the approval error untouched, and a mirror the provider
+    /// rejects as expired is deleted — its token will never work again — before the approval
+    /// error surfaces, so the user is asked for the one action that actually clears it. Any
+    /// other failure (network, server, malformed response) is real and propagates as itself.
+    private func mirrorFallback(
+        _ mirror: MirrorAddress,
+        for account: ProviderAccount,
+        using context: ProviderContext,
+        blockedBy original: UsageError
+    ) async throws -> UsageReport {
+        do {
+            return try await fetchOAuthUsage(
+                at: mirror.read, for: account, using: context, mirrorTo: nil
+            )
+        } catch let error as UsageError {
+            switch error.category {
+            case .credentialUnavailable, .interactionRequired:
+                throw original
+            case .authenticationExpired:
+                try? context.managedCredentials?.removeCredential(at: mirror.storage)
+                throw original
+            default:
+                throw error
+            }
+        }
     }
 
     /// The usage request, minus authorization.
@@ -164,11 +254,20 @@ public struct ClaudeProvider: Provider {
     ///
     /// Only the backend decides the honest instruction: running `claude` refreshes the CLI's own
     /// Keychain item, but it neither writes `.credentials.json` on macOS nor repairs a Usage-owned
-    /// setup token, so those backends name their own recovery instead.
-    static func reauthentication(for locator: CredentialLocator) -> ReauthAction? {
+    /// setup token, so those backends name their own recovery instead. A custom root's command
+    /// carries `CLAUDE_CONFIG_DIR`: bare `claude` refreshes the default root's item, and telling
+    /// the user to run it for a custom root would send them to fix the wrong credential.
+    static func reauthentication(
+        for locator: CredentialLocator,
+        configurationDirectory: String? = nil
+    ) -> ReauthAction? {
         switch locator.kind {
         case .keychain:
-            ReauthAction(summary: "Sign in to Claude Code again, then refresh.", command: "claude")
+            ReauthAction(
+                summary: "Sign in to Claude Code again, then refresh.",
+                command: configurationDirectory.map { "env CLAUDE_CONFIG_DIR=\($0) claude" }
+                    ?? "claude"
+            )
         case .file:
             ReauthAction(
                 summary: "Restore or replace this profile's .credentials.json, then refresh."
@@ -180,17 +279,79 @@ public struct ClaudeProvider: Provider {
         }
     }
 
-    /// Attaches the locator's recovery instruction to the failures only the credential owner can
+    /// Attaches the account's recovery instruction to the failures only the credential owner can
     /// clear.
-    static func annotated(_ error: any Error, for locator: CredentialLocator) -> UsageError {
+    static func annotated(
+        _ error: any Error,
+        for account: ProviderAccount,
+        using context: ProviderContext
+    ) async -> UsageError {
         let usage = UsageError.normalized(error)
         switch usage.category {
         case .authenticationExpired, .credentialUnavailable:
-            guard let action = Self.reauthentication(for: locator) else { return usage }
+            guard
+                let action = Self.reauthentication(
+                    for: account.locator,
+                    configurationDirectory: await Self.customRootDirectory(
+                        for: account, using: context
+                    )
+                )
+            else { return usage }
             return usage.offering(action)
         default:
             return usage
         }
+    }
+
+    /// The account's configuration directory, but only when it is not the default `HOME/.claude` —
+    /// the bare `claude` command already means the default root.
+    private static func customRootDirectory(
+        for account: ProviderAccount,
+        using context: ProviderContext
+    ) async -> String? {
+        guard account.locator.kind == .keychain,
+            let rootID = account.profileRootID,
+            let roots = try? await context.enabledProfileRoots(for: id),
+            let root = roots.first(where: { $0.id == rootID })
+        else { return nil }
+        let service = ClaudeCodeKeychain.service(
+            for: root.directory,
+            homeDirectory: context.fileSystem.homeDirectory
+        )
+        guard service != ClaudeCodeKeychain.defaultService else { return nil }
+        return root.directory.standardizedFileURL.path(percentEncoded: false)
+    }
+
+    /// The account's locator, re-addressed to the newest row of its root's Claude Code service.
+    ///
+    /// Claude Code deletes and recreates its Keychain item on some credential rewrites, which
+    /// leaves the persistent reference captured at discovery dangling until the next rediscovery
+    /// wave. Re-resolving the newest row at fetch time — the same attributes-only query discovery
+    /// runs, incapable of prompting — lets a rotation heal inside the wave that would otherwise
+    /// surface one spurious failure. When the root is gone or enumeration answers nothing (a
+    /// locked keychain, a vanished service), the discovery locator stands and the fetch fails the
+    /// way it always has.
+    private static func freshKeychainLocator(
+        for account: ProviderAccount,
+        using context: ProviderContext
+    ) async -> CredentialLocator {
+        guard account.locator.kind == .keychain,
+            let rootID = account.profileRootID,
+            let roots = try? await context.enabledProfileRoots(for: id),
+            let root = roots.first(where: { $0.id == rootID })
+        else { return account.locator }
+        let namespace = ClaudeCodeKeychain.namespace(
+            for: root.directory,
+            homeDirectory: context.fileSystem.homeDirectory
+        )
+        guard let slots = try? await context.credentials.slots(in: namespace),
+            let newest = slots.first
+        else { return account.locator }
+        return CredentialLocator(
+            kind: .keychain,
+            identifier: newest.locator.identifier,
+            path: ClaudeCredentialFile.secretPath
+        )
     }
 
     /// The Claude Code Keychain account for one root, or nothing when its derived service holds no
