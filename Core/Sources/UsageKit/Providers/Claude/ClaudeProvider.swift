@@ -10,10 +10,12 @@ import Foundation
 /// only by an explicit Settings action into a Usage-owned item and is resolved through the same
 /// operation-scoped boundary as every other credential.
 ///
-/// The one write Usage performs is into its own Keychain: after a successful keychain-backed
-/// fetch, a redacted copy of the credential (`ClaudeCredentialMirror` — access token and plan
-/// fields, never the refresh token) is stored under Usage's own service, and a fetch blocked by
-/// a voided read approval falls back to that copy until its token expires.
+/// The writes Usage performs are into its own Keychain: after a successful keychain-backed
+/// fetch, a trimmed copy of the credential (`ClaudeCredentialMirror`) is stored under Usage's
+/// own service, and a fetch the row cannot serve falls back to that copy, with
+/// `ClaudeTokenRefresh` rotating its tokens. Why one approval then suffices — and why no
+/// approval on Claude Code's own item can ever be durable — is recorded in
+/// docs/keychain-gate.md (2026-08-19).
 public struct ClaudeProvider: Provider {
     public static let id = ProviderID("claude")
 
@@ -102,10 +104,15 @@ public struct ClaudeProvider: Provider {
             return try await fetchOAuthUsage(
                 at: locator, for: account, using: context, mirrorTo: mirror
             )
-        } catch let error as UsageError where error.requiresCredentialApproval {
-            // Background refreshes soften a voided grant with the mirror. An explicit approval
-            // read must not: the user was just shown the dialog, and masking a denial with
-            // yesterday's copy would report an approval that did not happen.
+        } catch let error as UsageError
+            where error.requiresCredentialApproval || error.category == .authenticationExpired
+        {
+            // Background refreshes soften a voided grant or a stale row token with the mirror.
+            // An explicit approval read must not: the user was just shown the dialog, and
+            // masking a denial with yesterday's copy would report an approval that did not
+            // happen. Both failures share the one fallback flow, whose refresh is expiry-driven
+            // — a forced exchange per wave would hammer the token endpoint and rotate the
+            // refresh token for nothing.
             guard let mirror, !context.interaction.allowsCredentialUI else { throw error }
             return try await mirrorFallback(
                 mirror, for: account, using: context, blockedBy: error
@@ -126,11 +133,23 @@ public struct ClaudeProvider: Provider {
                     (data: Data) throws(UsageError) -> ClaudeCredentialMetadata in
                     try ClaudeCredentialFile.parse(data, kind: account.locator.kind)
                 } ?? Self.fileMetadata(for: account, using: context)
+            // A token the document itself declares expired earns no request when a fallback
+            // exists: the send is guaranteed to 401, and a 401 every wave is the traffic shape
+            // that trips the endpoint's abuse throttling. Without a mirror — or on an explicit
+            // approval read, which exists to prove the credential — the provider still decides.
+            if mirror != nil, !context.interaction.allowsCredentialUI,
+                ClaudeTokenRefresh.isExpired(
+                    metadata?.expiresAtMilliseconds, now: context.clock.now
+                )
+            {
+                throw UsageError.credentialExpired()
+            }
             let response = try await context.http.send(
                 credential.authorizing(Self.usageRequest(), with: .bearer)
             )
-            // A 2xx proves the token, and only a proven token is worth copying. The redaction
-            // drops the refresh token before anything reaches the Usage-owned row.
+            // A 2xx proves the token, and only a proven token is worth copying. The copy keeps
+            // the refresh token so `ClaudeTokenRefresh` can rotate it after Claude Code's next
+            // ACL-resetting write; scopes and unused fields are still dropped.
             if response.isSuccess, let mirror, let store = context.managedCredentials {
                 credential.persistRedactedCopy(
                     into: store,
@@ -174,18 +193,65 @@ public struct ClaudeProvider: Provider {
         )
     }
 
-    /// One fetch through the mirrored copy, tried only after the real row needed approval.
+    /// One fetch through the mirrored copy, tried only after the real row was unusable — with
+    /// the copy's tokens rotated when their stored expiry says they aged out.
     ///
-    /// The mirror can only ever soften that failure, not change its story: an absent or
-    /// unreadable mirror re-throws the approval error untouched, and a mirror the provider
-    /// rejects as expired is deleted — its token will never work again — before the approval
-    /// error surfaces, so the user is asked for the one action that actually clears it. Any
-    /// other failure (network, server, malformed response) is real and propagates as itself.
+    /// Only a rejection of the refresh token itself hands the story back to `original`, whose
+    /// instruction names the action that re-seeds the mirror. A 401 despite an unrotated token
+    /// earns exactly one forced exchange and one retry — repeating either would hammer the
+    /// endpoints whose throttling this fallback exists to avoid.
     private func mirrorFallback(
         _ mirror: MirrorAddress,
         for account: ProviderAccount,
         using context: ProviderContext,
         blockedBy original: UsageError
+    ) async throws -> UsageReport {
+        guard let store = context.managedCredentials else { throw original }
+        let refreshed = await ClaudeTokenRefresh.refresh(
+            rowAt: mirror.storage, in: store, using: context.http, now: context.clock.now
+        )
+        // A fetch with a token the exchange just failed to replace would be a doomed request;
+        // `.failed` keeps the row (the exchange may work next wave), `.invalidGrant` deleted it.
+        if refreshed == .invalidGrant || refreshed == .failed { throw original }
+        return try await fetchThroughMirror(
+            mirror, for: account, using: context, blockedBy: original
+        ) {
+            guard refreshed != .refreshed else {
+                // Freshly minted tokens that still 401 mean the grant chain is dead end to end.
+                try Self.surface(original, deletingDeadMirror: mirror, from: store)
+            }
+            switch await ClaudeTokenRefresh.refresh(
+                rowAt: mirror.storage, in: store, using: context.http,
+                now: context.clock.now, force: true
+            ) {
+            case .refreshed:
+                return try await self.fetchThroughMirror(
+                    mirror, for: account, using: context, blockedBy: original
+                ) {
+                    try Self.surface(original, deletingDeadMirror: mirror, from: store)
+                }
+            case .unavailable:
+                // A copy that 401s and holds no refresh token can never work again — the shape
+                // of a legacy access-token-only mirror.
+                try Self.surface(original, deletingDeadMirror: mirror, from: store)
+            case .invalidGrant, .failed, .fresh:
+                // invalidGrant already deleted the row; a transient failure must keep it —
+                // deleting on a token-endpoint blip would destroy the refresh token.
+                throw original
+            }
+        }
+    }
+
+    /// One fetch addressed at the mirror, with the shared failure story: unusable-mirror
+    /// failures re-throw the error that brought us here, a stale mirror token defers to
+    /// `onExpired`, and anything else (network, server, malformed response) is real and
+    /// propagates as itself.
+    private func fetchThroughMirror(
+        _ mirror: MirrorAddress,
+        for account: ProviderAccount,
+        using context: ProviderContext,
+        blockedBy original: UsageError,
+        onExpired: () async throws -> UsageReport
     ) async throws -> UsageReport {
         do {
             return try await fetchOAuthUsage(
@@ -196,12 +262,24 @@ public struct ClaudeProvider: Provider {
             case .credentialUnavailable, .interactionRequired:
                 throw original
             case .authenticationExpired:
-                try? context.managedCredentials?.removeCredential(at: mirror.storage)
-                throw original
+                return try await onExpired()
             default:
                 throw error
             }
         }
+    }
+
+    /// Deletes a mirror row whose tokens can never work again, then surfaces the blocking error.
+    ///
+    /// The delete is best-effort, like the mirror write itself: a failure only means the next
+    /// fallback re-reads a dead token, 401s again, and retries the delete.
+    private static func surface(
+        _ original: UsageError,
+        deletingDeadMirror mirror: MirrorAddress,
+        from store: any ManagedCredentialStore
+    ) throws -> Never {
+        try? store.removeCredential(at: mirror.storage)
+        throw original
     }
 
     /// The usage request, minus authorization.
@@ -303,17 +381,26 @@ public struct ClaudeProvider: Provider {
         }
     }
 
+    /// The enabled root behind one keychain-backed account, which every root-scoped Keychain
+    /// derivation resolves the same way.
+    private static func enabledRoot(
+        for account: ProviderAccount,
+        using context: ProviderContext
+    ) async -> ProfileRootLocation? {
+        guard account.locator.kind == .keychain,
+            let rootID = account.profileRootID,
+            let roots = try? await context.enabledProfileRoots(for: id)
+        else { return nil }
+        return roots.first { $0.id == rootID }
+    }
+
     /// The account's configuration directory, but only when it is not the default `HOME/.claude` —
     /// the bare `claude` command already means the default root.
     private static func customRootDirectory(
         for account: ProviderAccount,
         using context: ProviderContext
     ) async -> String? {
-        guard account.locator.kind == .keychain,
-            let rootID = account.profileRootID,
-            let roots = try? await context.enabledProfileRoots(for: id),
-            let root = roots.first(where: { $0.id == rootID })
-        else { return nil }
+        guard let root = await enabledRoot(for: account, using: context) else { return nil }
         let service = ClaudeCodeKeychain.service(
             for: root.directory,
             homeDirectory: context.fileSystem.homeDirectory
@@ -335,18 +422,25 @@ public struct ClaudeProvider: Provider {
         for account: ProviderAccount,
         using context: ProviderContext
     ) async -> CredentialLocator {
-        guard account.locator.kind == .keychain,
-            let rootID = account.profileRootID,
-            let roots = try? await context.enabledProfileRoots(for: id),
-            let root = roots.first(where: { $0.id == rootID })
-        else { return account.locator }
+        guard let root = await enabledRoot(for: account, using: context) else {
+            return account.locator
+        }
         let namespace = ClaudeCodeKeychain.namespace(
             for: root.directory,
             homeDirectory: context.fileSystem.homeDirectory
         )
+        return await Self.newestKeychainLocator(in: namespace, using: context) ?? account.locator
+    }
+
+    /// The newest row of one Claude Code service, addressed at the bearer token inside its
+    /// document — the one construction discovery and fetch-time re-addressing must agree on.
+    private static func newestKeychainLocator(
+        in namespace: CredentialLocator,
+        using context: ProviderContext
+    ) async -> CredentialLocator? {
         guard let slots = try? await context.credentials.slots(in: namespace),
             let newest = slots.first
-        else { return account.locator }
+        else { return nil }
         return CredentialLocator(
             kind: .keychain,
             identifier: newest.locator.identifier,
@@ -369,17 +463,14 @@ public struct ClaudeProvider: Provider {
             for: root.directory,
             homeDirectory: context.fileSystem.homeDirectory
         )
-        let slots = (try? await context.credentials.slots(in: namespace)) ?? []
-        guard let descriptor = slots.first else { return nil }
+        guard let locator = await Self.newestKeychainLocator(in: namespace, using: context) else {
+            return nil
+        }
         let slot = Self.slot(for: root.directory)
         return ProviderAccount(
             key: AccountKey(providerID: id, accountID: .credentialSlot(provider: id, slot: slot)),
             slot: slot,
-            locator: CredentialLocator(
-                kind: .keychain,
-                identifier: descriptor.locator.identifier,
-                path: ClaudeCredentialFile.secretPath
-            ),
+            locator: locator,
             profileRootID: root.id,
             displayName: root.label,
             availability: .active

@@ -250,11 +250,15 @@ final class ProfileSettingsModel {
             removed.providerID == ClaudeProvider.id
         {
             do {
-                try managedCredentials.removeCredential(
-                    at: ClaudeSetupTokenCredential.locator(for: removed.id)
-                )
+                // Mirror before setup token: a failure between the two aborts the removal, and
+                // the surviving root must keep its live credential — losing the cosmetic mirror
+                // copy is harmless, losing the setup token darkens an account the user still
+                // has. Both removals tolerate a missing row, so a retry heals either order.
                 try managedCredentials.removeCredential(
                     at: ClaudeCredentialMirror.storageLocator(for: removed.id)
+                )
+                try managedCredentials.removeCredential(
+                    at: ClaudeSetupTokenCredential.locator(for: removed.id)
                 )
             } catch {
                 errorMessage = Self.message(for: error)

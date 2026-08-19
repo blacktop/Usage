@@ -94,14 +94,38 @@ struct ProviderUsagePresentation {
                 )
             }
         }
-        windowGroups = order.compactMap { id in
+        let groups = order.compactMap { id -> WindowGroup? in
             guard let label = labels[id], let meters = grouped[id] else { return nil }
             return WindowGroup(id: id, label: label, meters: meters)
         }
+        windowGroups = Self.disambiguated(groups)
 
         credits = discovered.compactMap { account in
             guard let balance = account.state?.report?.credits else { return nil }
             return Credit(account: account, balance: balance)
+        }
+    }
+
+    /// `groups`, with any label shared by several groups qualified by its window's period.
+    ///
+    /// Distinct windows may carry one display label — Codex reports its Spark feature as a
+    /// 5-hour window and a weekly window both labeled "GPT-5.3-Codex-Spark" — and identical
+    /// adjacent section headers read as a rendering bug rather than as two periods.
+    private static func disambiguated(_ groups: [WindowGroup]) -> [WindowGroup] {
+        var labelCounts: [String: Int] = [:]
+        for group in groups {
+            labelCounts[group.label, default: 0] += 1
+        }
+        guard labelCounts.values.contains(where: { $0 > 1 }) else { return groups }
+        return groups.map { group in
+            guard labelCounts[group.label, default: 0] > 1,
+                let period = group.meters.first?.window.periodName
+            else { return group }
+            return WindowGroup(
+                id: group.id,
+                label: "\(group.label) · \(period)",
+                meters: group.meters
+            )
         }
     }
 

@@ -505,9 +505,9 @@ struct ProfileSettingsModelTests {
         let stored = try collection(["/Users/fixture/profiles/work"])
         let id = try #require(stored.profiles.first).id
         let tokenStore = InMemoryManagedCredentialStore(
-            locators: [
-                ClaudeSetupTokenCredential.locator(for: id),
-                ClaudeCredentialMirror.storageLocator(for: id),
+            payloads: [
+                ClaudeSetupTokenCredential.locator(for: id): "stored-token",
+                ClaudeCredentialMirror.storageLocator(for: id): "stored-mirror",
             ]
         )
         let harness = Harness(collection: stored, managedCredentials: tokenStore)
@@ -537,7 +537,7 @@ struct ProfileSettingsModelTests {
         let id = try #require(stored.profiles.first).id
         let locator = ClaudeSetupTokenCredential.locator(for: id)
         let tokenStore = InMemoryManagedCredentialStore(
-            locators: [locator],
+            payloads: [locator: "stored-token"],
             removalFailure: .storageUnavailable
         )
         let harness = Harness(collection: stored, managedCredentials: tokenStore)

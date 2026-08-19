@@ -138,6 +138,9 @@ struct CredentialApprovalNotifierTests {
         await notifier.receive(
             .discovered(accounts: [replacement], provider: ScriptedProvider.id, at: start)
         )
+        // Retirement withdrew the outstanding notification: the retired account can never emit
+        // the success that would otherwise clear it.
+        #expect(await presenter.withdrawals == [ScriptedProvider.accountKey])
         await fail(with: .interactionForbidden())
         #expect(await presenter.alerts.count == 2)
         // Retirement dropped the cached display name along with the flag, so the re-alert falls

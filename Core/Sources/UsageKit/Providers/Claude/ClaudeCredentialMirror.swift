@@ -1,16 +1,12 @@
 import Foundation
 
-/// Usage's own last-good copy of one root's Claude Code keychain credential.
+/// Usage's own copy of one root's Claude Code credential, kept fresh by `ClaudeTokenRefresh`.
 ///
-/// Claude Code deletes and recreates its keychain item on some credential rewrites, and every
-/// recreation voids the read approval the user last granted — the ACL grant lives on the item.
-/// The mirror is an item Usage creates under its own signing requirement, so it survives those
-/// rotations and lets a background refresh keep reporting full-resolution usage until the copied
-/// token expires, instead of going dark the moment the grant dies.
-///
-/// The copy is redacted before it is stored: only the access token and the two plan-label fields
-/// survive. The refresh token never leaves the source document — Usage cannot refresh a token and
-/// must not hold the credential that could.
+/// The mirror is an item Usage creates under its own signing requirement, holding both tokens,
+/// the expiry, and the plan fields; scopes and every field Usage does not use are dropped. One
+/// approval captures the credential, after which Usage is independent of Claude Code's item —
+/// necessary because no read approval on that item can be durable, as documented with the
+/// extracted evidence in docs/keychain-gate.md (2026-08-19).
 public enum ClaudeCredentialMirror {
     /// Deliberately unrelated to Claude Code's own service, like the setup-token service.
     public static let service = "io.blacktop.Usage.claude-mirror"
@@ -30,36 +26,43 @@ public enum ClaudeCredentialMirror {
         CredentialLocator(kind: .appKeychain, identifier: service, path: [rootID.description])
     }
 
-    /// The redacted single-line document to store, or `nil` when the source holds no usable
+    /// The trimmed single-line document to store, or `nil` when the source holds no usable
     /// subscription token.
     ///
-    /// Keeping the stored shape identical to Claude Code's own document — minus everything Usage
-    /// does not use — means `ClaudeCredentialFile.secretPath` and the plan-label parser read the
-    /// mirror exactly as they read the original.
+    /// Keeping the stored shape identical to Claude Code's own document — minus the fields Usage
+    /// does not use — means `ClaudeCredentialFile.secretPath`, the plan-label parser, and the
+    /// refresher read the mirror exactly as they read the original.
     static func payload(from document: Data) -> String? {
-        guard let source = try? JSONDecoder().decode(Source.self, from: document),
-            let accessToken = source.accessToken
-        else { return nil }
-        var oauth: [String: String] = ["accessToken": accessToken]
-        oauth["subscriptionType"] = source.subscriptionType
-        oauth["rateLimitTier"] = source.rateLimitTier
+        ClaudeCredentialFile.oauthFields(from: document).flatMap(payload(fields:))
+    }
+
+    /// The stored form of one set of OAuth fields — also how the refresher writes rotated tokens.
+    static func payload(fields: ClaudeCredentialFile.OAuthFields) -> String? {
+        guard let accessToken = fields.accessToken else { return nil }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(["claudeAiOauth": oauth]) else { return nil }
+        let document = StoredDocument(
+            claudeAiOauth: StoredDocument.OAuth(
+                accessToken: accessToken,
+                refreshToken: fields.refreshToken,
+                expiresAt: fields.expiresAtMilliseconds,
+                rateLimitTier: fields.rateLimitTier,
+                subscriptionType: fields.subscriptionType
+            )
+        )
+        guard let data = try? encoder.encode(document) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
-    private struct Source: Decodable {
-        let accessToken: String?
-        let subscriptionType: String?
-        let rateLimitTier: String?
-
-        init(from decoder: any Decoder) throws {
-            let root = try decoder.container(keyedBy: AnyCodingKey.self)
-            let oauth = root.nested("claudeAiOauth")
-            accessToken = oauth?.trimmedString("accessToken")
-            subscriptionType = oauth?.trimmedString("subscriptionType")
-            rateLimitTier = oauth?.trimmedString("rateLimitTier")
+    private struct StoredDocument: Encodable {
+        struct OAuth: Encodable {
+            let accessToken: String
+            let refreshToken: String?
+            let expiresAt: Int?
+            let rateLimitTier: String?
+            let subscriptionType: String?
         }
+
+        let claudeAiOauth: OAuth
     }
 }

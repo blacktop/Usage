@@ -35,6 +35,16 @@ struct ProviderAccountIssuePresentation {
     /// the cooldown reads as the app silently ignoring the user.
     let retryAt: Date?
 
+    /// The inert menu-entry label while the cooldown holds, or `nil` once it has lapsed.
+    ///
+    /// "Rate limited" only when the provider said so: any `Retry-After` installs the cooldown,
+    /// but a throttle and a 503 are different stories.
+    func cooldownLabel(now: Date) -> String? {
+        guard let retryAt, retryAt > now else { return nil }
+        let reason = error?.category == .rateLimited ? "Rate limited" : "Cooling down"
+        return "\(reason) — retries at \(retryAt.formatted(date: .omitted, time: .shortened))"
+    }
+
     init(account: ProviderUsagePresentation.Account) {
         let lastError = account.state?.lastError
         // A 429 is evidence about the provider endpoint, not proof that the account exhausted its

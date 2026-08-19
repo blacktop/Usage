@@ -33,8 +33,9 @@ nonisolated protocol CredentialApprovalPresenter: Sendable {
 /// so a stale "needs approval" cannot sit in Notification Center after the user has already fixed
 /// it. A five-minute refresh cadence cannot repeat the alert, and a later rotation alerts again.
 /// A retired account's flag and cached name are dropped with it, the same way the coordinator
-/// drops its schedule — and, like the coordinator, an empty discovery retires nothing, because
-/// providers answer empty both for "gone" and for "unreadable right now".
+/// drops its schedule, and its delivered notification is withdrawn — retirement is the one exit
+/// where no success can ever do that. Like the coordinator, an empty discovery retires nothing,
+/// because providers answer empty both for "gone" and for "unreadable right now".
 actor CredentialApprovalNotifier: RefreshEventSink {
     private let presenter: any CredentialApprovalPresenter
     private var accountNames: [AccountKey: String] = [:]
@@ -52,10 +53,18 @@ actor CredentialApprovalNotifier: RefreshEventSink {
                 accountNames[account.key] = account.displayName
             }
             let surviving = Set(accounts.map(\.key))
-            alerted = alerted.filter { $0.providerID != provider || surviving.contains($0) }
-            accountNames = accountNames.filter {
-                $0.key.providerID != provider || surviving.contains($0.key)
+            let survives: (AccountKey) -> Bool = {
+                $0.providerID != provider || surviving.contains($0)
             }
+            // A retired account can never emit the success that would withdraw its alert, so
+            // retirement withdraws it here — otherwise the delivered notification outlives the
+            // account it reports on, telling the user to approve a credential the app no longer
+            // tracks.
+            for key in alerted where !survives(key) {
+                await presenter.withdraw(for: key)
+            }
+            alerted = alerted.filter(survives)
+            accountNames = accountNames.filter { survives($0.key) }
         case .failed(let error, let key, _):
             guard error.requiresCredentialApproval, !alerted.contains(key) else { return }
             alerted.insert(key)

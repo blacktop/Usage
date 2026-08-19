@@ -118,7 +118,7 @@ extension RefreshCoordinator {
         for key: AccountKey,
         using interactiveCredentials: any CredentialSource
     ) async {
-        guard var state = states[key], !state.isInFlight,
+        guard let state = states[key], !state.isInFlight,
             let provider = registry.provider(for: key.providerID)
         else { return }
         guard !isSuspended else {
@@ -130,15 +130,15 @@ extension RefreshCoordinator {
         // would burn a one-time "Allow" on a doomed fetch and walk past the cooldown that manual
         // refresh and wake already respect. The approval waits the cooldown out instead.
         let now = clock.now
-        let earliest = clamped(now, for: key, state: state)
-        guard earliest <= now else {
-            state.dueAt = earliest
-            states[key] = state
+        guard let account = claim(key, notBefore: now, at: now) else {
+            // The claim parked the account at its cooldown's end, which can be earlier than the
+            // deadline the timer went to sleep for. Interrupting the wait makes the retry the
+            // UI just promised fire at the cooldown's end, not at the stale deadline.
+            sleepTask?.cancel()
+            ensureScheduler()
             await sink.receive(.scheduled(key: key))
             return
         }
-        state.isInFlight = true
-        states[key] = state
         await sink.receive(.began(key: key, at: clock.now))
 
         let interactiveContext = ProviderContext(
@@ -150,7 +150,7 @@ extension RefreshCoordinator {
             profileRoots: context.profileRoots,
             managedCredentials: context.managedCredentials
         )
-        let result = await Self.fetch(state.account, from: provider, using: interactiveContext)
+        let result = await Self.fetch(account, from: provider, using: interactiveContext)
         await complete(result)
         ensureScheduler()
     }
@@ -298,8 +298,9 @@ extension RefreshCoordinator {
     /// endpoint budgets a handful of requests per token, so a hand that keeps pressing Refresh
     /// must not be able to hold an account rate-limited forever. Attempts that never sent a
     /// request — a first fetch, a vanished credential, a read awaiting approval — cost no budget
-    /// and go now. A cooldown is not consulted here and does not need to be: `claimIfDue` is the
-    /// one place a fetch can start, and it refuses a cooling account there.
+    /// and go now. A cooldown is not consulted here and does not need to be: every fetch start —
+    /// a scheduled wave's `claimIfDue`, a credential approval — passes through `claim`, and it
+    /// refuses a cooling account there.
     private func markDue(at now: Date) {
         for key in order {
             guard var state = states[key], !state.isInFlight else { continue }
@@ -366,8 +367,16 @@ extension RefreshCoordinator {
 
     /// Takes an account for this wave, or pushes its deadline out to its cooldown and declines it.
     private func claimIfDue(_ key: AccountKey, at now: Date) -> ProviderAccount? {
+        guard let state = states[key] else { return nil }
+        return claim(key, notBefore: state.dueAt, at: now)
+    }
+
+    /// The one gate every fetch start passes through: claims the account, or pushes its deadline
+    /// out to every applicable cooldown and declines. Scheduled waves clamp the account's own
+    /// deadline; a credential approval clamps the instant the user acted.
+    private func claim(_ key: AccountKey, notBefore base: Date, at now: Date) -> ProviderAccount? {
         guard var state = states[key], !state.isInFlight else { return nil }
-        let earliest = clamped(state.dueAt, for: key, state: state)
+        let earliest = clamped(base, for: key, state: state)
         guard earliest <= now else {
             state.dueAt = earliest
             states[key] = state

@@ -7,17 +7,19 @@ import Testing
 struct ClaudeCredentialMirrorTests {
     private let rootID = ProfileRootID()
 
-    @Test("the mirror payload keeps the access token and plan fields, and nothing else")
-    func payloadIsRedacted() throws {
+    @Test("the mirror payload keeps both tokens, the expiry, and the plan fields — nothing else")
+    func payloadKeepsTheRefreshableCredential() throws {
         let source = try ProviderFixtures.data("Claude", "claude-credential-happy")
 
         let payload = try #require(ClaudeCredentialMirror.payload(from: source))
 
         #expect(payload.contains("sk-ant-oat01-FAKE-ACCESS-TOKEN-DO-NOT-USE-0000000000"))
+        #expect(
+            payload.contains("sk-ant-ort01-FAKE-REFRESH-TOKEN-DO-NOT-USE-000000000"),
+            "the refresh token is what lets Usage outlive Claude Code's ACL-resetting writes"
+        )
+        #expect(payload.contains("\"expiresAt\":4102444800000"))
         #expect(payload.contains("default_claude_max_20x"))
-        #expect(!payload.contains("refreshToken"))
-        #expect(!payload.contains("sk-ant-ort01"), "the refresh token never reaches the mirror")
-        #expect(!payload.contains("expiresAt"))
         #expect(!payload.contains("scopes"))
         #expect(!payload.contains("\n"), "the store accepts only single-line payloads")
     }

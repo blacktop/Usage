@@ -80,10 +80,12 @@ enum KeychainACLPreflight {
                 )
             else { continue }
             sawEntry = true
-            let validations = entry.applications.map { applications in
-                applications.map { application in
-                    functions.validateTrustedApplication(application, executablePath)
-                        == errSecSuccess
+            let validations = withExtendedLifetime(entry.applicationList) {
+                entry.applications.map { applications in
+                    applications.map { application in
+                        functions.validateTrustedApplication(application, executablePath)
+                            == errSecSuccess
+                    }
                 }
             }
             if Self.entryAllows(
@@ -104,8 +106,10 @@ enum KeychainACLPreflight {
 
     private struct ACLEntry {
         let promptSelector: UInt16
+        /// Owns the trusted-application objects that `applications` points into unretained.
+        let applicationList: CFArray?
         /// `nil` when the entry restricts no applications; otherwise the trusted-application
-        /// pointers to validate.
+        /// pointers to validate, valid only while `applicationList` lives.
         let applications: [UnsafeMutableRawPointer]?
     }
 
@@ -125,7 +129,7 @@ enum KeychainACLPreflight {
             Unmanaged<AnyObject>.fromOpaque(descriptionPointer).release()
         }
         guard let applicationsPointer else {
-            return ACLEntry(promptSelector: promptSelector, applications: nil)
+            return ACLEntry(promptSelector: promptSelector, applicationList: nil, applications: nil)
         }
         let applicationList = Unmanaged<CFArray>.fromOpaque(applicationsPointer)
             .takeRetainedValue()
@@ -134,7 +138,11 @@ enum KeychainACLPreflight {
             guard let pointer = CFArrayGetValueAtIndex(applicationList, index) else { continue }
             applications.append(UnsafeMutableRawPointer(mutating: pointer))
         }
-        return ACLEntry(promptSelector: promptSelector, applications: applications)
+        return ACLEntry(
+            promptSelector: promptSelector,
+            applicationList: applicationList,
+            applications: applications
+        )
     }
 
     /// The four deprecated calls and the authorization-tag constant, resolved once.

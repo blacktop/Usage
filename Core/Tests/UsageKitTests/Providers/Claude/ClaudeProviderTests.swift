@@ -22,6 +22,16 @@ struct ClaudeProviderTests {
         ClaudeCodeKeychain.namespace(for: root, homeDirectory: ProviderFixtures.home)
     }
 
+    /// The mirror payload of the expired fixture: both tokens present, expiry in the past
+    /// relative to `Self.now`, so the fallback must exchange before it can fetch.
+    private func expiredMirrorPayload() throws -> String {
+        try #require(
+            ClaudeCredentialMirror.payload(
+                from: try ProviderFixtures.data("Claude", "claude-credential-expired")
+            )
+        )
+    }
+
     private func fileSystem(credential fixture: String?) throws -> SealedFileSystem {
         guard let fixture else { return SealedFileSystem() }
         return SealedFileSystem(
@@ -249,11 +259,15 @@ struct ClaudeProviderTests {
 
     // MARK: - Credential mirror
 
-    /// One keychain-backed root whose row needs approval, plus whatever the mirror test seeds.
+    /// One keychain-backed root, plus whatever the mirror test seeds. By default the row needs
+    /// approval; `locatorNeedsApproval: false` makes it readable, for the happy-path write test.
     private func mirrorSetup(
         root: ProfileRoot,
         mirrorSecrets: [CredentialLocator: String] = [:],
         mirrorDocuments: [CredentialLocator: Data] = [:],
+        primarySecret: String? = nil,
+        primaryDocument: Data? = nil,
+        locatorNeedsApproval: Bool = true,
         http: InMemoryHTTPTransport
     ) throws -> (
         locator: CredentialLocator,
@@ -266,9 +280,13 @@ struct ClaudeProviderTests {
             identifier: "cmVmZXJlbmNl",
             path: ClaudeCredentialFile.secretPath
         )
+        var secrets = mirrorSecrets
+        secrets[locator] = primarySecret
+        var documents = mirrorDocuments
+        documents[locator] = primaryDocument
         let credentials = SealedCredentialSource(
-            secrets: mirrorSecrets,
-            documents: mirrorDocuments,
+            secrets: secrets,
+            documents: documents,
             slots: [
                 namespace: [
                     CredentialSlotDescriptor(
@@ -278,7 +296,7 @@ struct ClaudeProviderTests {
                     )
                 ]
             ],
-            interactiveOnly: [locator]
+            interactiveOnly: locatorNeedsApproval ? [locator] : []
         )
         let store = try SealedProfileRoots.store(root)
         return (
@@ -302,38 +320,20 @@ struct ClaudeProviderTests {
             label: "Claude",
             at: ProviderFixtures.claudeRoot
         )
-        let namespace = Self.keychainNamespace(for: ProviderFixtures.claudeRoot)
-        let locator = CredentialLocator(
-            kind: .keychain,
-            identifier: "cmVmZXJlbmNl",
-            path: ClaudeCredentialFile.secretPath
-        )
         let http = InMemoryHTTPTransport()
         http.stub(
             ClaudeProvider.usageURL,
             with: try ProviderFixtures.response("Claude", "claude-usage-happy")
         )
-        let credentials = SealedCredentialSource(
-            secrets: [locator: Self.accessToken],
-            documents: [locator: try ProviderFixtures.data("Claude", "claude-credential-happy")],
-            slots: [
-                namespace: [
-                    CredentialSlotDescriptor(
-                        slot: CredentialSlotID(
-                            source: "keychain:\(namespace.identifier)", opaqueID: "user"),
-                        locator: CredentialLocator(kind: .keychain, identifier: "cmVmZXJlbmNl")
-                    )
-                ]
-            ]
+        let setup = try mirrorSetup(
+            root: root,
+            primarySecret: Self.accessToken,
+            primaryDocument: try ProviderFixtures.data("Claude", "claude-credential-happy"),
+            locatorNeedsApproval: false,
+            http: http
         )
         let mirror = InMemoryManagedCredentialStore()
-        let context = ProviderContext.sealed(
-            credentials: credentials,
-            http: http,
-            clock: ManualClock(now: Self.now),
-            profileRoots: try SealedProfileRoots.store(root),
-            managedCredentials: mirror
-        )
+        let context = try setup.makeContext(mirror)
         let account = try #require(
             try await ClaudeProvider().discoverAccounts(using: context).first
         )
@@ -399,7 +399,7 @@ struct ClaudeProviderTests {
             http: http
         )
         let storageLocator = ClaudeCredentialMirror.storageLocator(for: root.id)
-        let mirror = InMemoryManagedCredentialStore(locators: [storageLocator])
+        let mirror = InMemoryManagedCredentialStore(payloads: [storageLocator: "unreadable-row"])
         let context = try setup.makeContext(mirror)
         let account = try #require(
             try await ClaudeProvider().discoverAccounts(using: context).first
@@ -453,6 +453,228 @@ struct ClaudeProviderTests {
         #expect(
             setup.credentials.resolvedLocators == [setup.locator],
             "the mirror was never consulted"
+        )
+    }
+
+    @Test("an aged mirror exchanges its refresh token before fetching, and keeps the rotation")
+    func agedMirrorSelfRefreshes() async throws {
+        let http = InMemoryHTTPTransport()
+        http.stub(
+            ClaudeProvider.usageURL,
+            with: try ProviderFixtures.response("Claude", "claude-usage-happy")
+        )
+        http.stub(
+            ClaudeTokenRefresh.endpoint,
+            with: ProviderFixtures.claudeGrantResponse()
+        )
+        let root = try SealedProfileRoots.root(
+            ClaudeProvider.id, label: "Claude", at: ProviderFixtures.claudeRoot
+        )
+        let source = try ProviderFixtures.data("Claude", "claude-credential-happy")
+        let mirrorRead = ClaudeCredentialMirror.locator(for: root.id)
+        let setup = try mirrorSetup(
+            root: root,
+            mirrorSecrets: [mirrorRead: Self.accessToken],
+            mirrorDocuments: [mirrorRead: source],
+            http: http
+        )
+        let expired = try expiredMirrorPayload()
+        let storage = ClaudeCredentialMirror.storageLocator(for: root.id)
+        let mirror = InMemoryManagedCredentialStore(payloads: [storage: expired])
+        let context = try setup.makeContext(mirror)
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(using: context).first
+        )
+
+        let report = try await ClaudeProvider().fetchUsage(for: account, using: context)
+
+        #expect(!report.windows.isEmpty)
+        #expect(
+            http.recordedRequests.map(\.url) == [
+                ClaudeTokenRefresh.endpoint, ClaudeProvider.usageURL,
+            ],
+            "the exchange runs before the usage fetch"
+        )
+        let rotated = try #require(mirror.readCredential(at: storage))
+        #expect(rotated.contains(ProviderFixtures.mintedClaudeAccessToken))
+    }
+
+    @Test("a stale row token is healed by a forced exchange of the mirrored refresh token")
+    func staleRowTokenHealsThroughMirrorExchange() async throws {
+        let http = InMemoryHTTPTransport()
+        http.stub(ClaudeProvider.usageURL, with: HTTPResponse(status: 401))
+        http.stub(
+            ClaudeProvider.usageURL,
+            with: try ProviderFixtures.response("Claude", "claude-usage-happy")
+        )
+        http.stub(
+            ClaudeTokenRefresh.endpoint,
+            with: ProviderFixtures.claudeGrantResponse()
+        )
+        let root = try SealedProfileRoots.root(
+            ClaudeProvider.id, label: "Claude DDB", at: ProviderFixtures.claudeRoot
+        )
+        let source = try ProviderFixtures.data("Claude", "claude-credential-happy")
+        let mirrorRead = ClaudeCredentialMirror.locator(for: root.id)
+        let setup = try mirrorSetup(
+            root: root,
+            mirrorSecrets: [mirrorRead: Self.accessToken],
+            mirrorDocuments: [mirrorRead: source],
+            primarySecret: Self.accessToken,
+            primaryDocument: source,
+            locatorNeedsApproval: false,
+            http: http
+        )
+        // The row's document claims an unexpired token (so the request is sent and 401s), while
+        // the mirror's copy has aged out (so the fallback must exchange before retrying).
+        let seeded = try expiredMirrorPayload()
+        let storage = ClaudeCredentialMirror.storageLocator(for: root.id)
+        let mirror = InMemoryManagedCredentialStore(payloads: [storage: seeded])
+        let context = try setup.makeContext(mirror)
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(using: context).first
+        )
+
+        let report = try await ClaudeProvider().fetchUsage(for: account, using: context)
+
+        #expect(!report.windows.isEmpty)
+        #expect(
+            http.recordedRequests.map(\.url) == [
+                ClaudeProvider.usageURL,
+                ClaudeTokenRefresh.endpoint,
+                ClaudeProvider.usageURL,
+            ],
+            "401 from the row, one forced exchange, one retry through the mirror"
+        )
+        #expect(setup.credentials.resolvedLocators == [setup.locator, mirrorRead])
+        let rotated = try #require(mirror.readCredential(at: storage))
+        #expect(rotated.contains(ProviderFixtures.mintedClaudeAccessToken))
+    }
+
+    @Test("a row whose document admits expiry never spends the doomed request")
+    func expiredRowDocumentSkipsTheDoomedRequest() async throws {
+        let http = InMemoryHTTPTransport()
+        http.stub(
+            ClaudeProvider.usageURL,
+            with: try ProviderFixtures.response("Claude", "claude-usage-happy")
+        )
+        let root = try SealedProfileRoots.root(
+            ClaudeProvider.id, label: "Claude DDB", at: ProviderFixtures.claudeRoot
+        )
+        let expiredDocument = try ProviderFixtures.data("Claude", "claude-credential-expired")
+        let freshMirror = try ProviderFixtures.data("Claude", "claude-credential-happy")
+        let mirrorRead = ClaudeCredentialMirror.locator(for: root.id)
+        let setup = try mirrorSetup(
+            root: root,
+            mirrorSecrets: [mirrorRead: Self.accessToken],
+            mirrorDocuments: [mirrorRead: freshMirror],
+            primarySecret: Self.accessToken,
+            primaryDocument: expiredDocument,
+            locatorNeedsApproval: false,
+            http: http
+        )
+        let storage = ClaudeCredentialMirror.storageLocator(for: root.id)
+        let seeded = try #require(ClaudeCredentialMirror.payload(from: freshMirror))
+        let mirror = InMemoryManagedCredentialStore(payloads: [storage: seeded])
+        let context = try setup.makeContext(mirror)
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(using: context).first
+        )
+
+        let report = try await ClaudeProvider().fetchUsage(for: account, using: context)
+
+        #expect(!report.windows.isEmpty)
+        #expect(
+            http.recordedRequests.map(\.url) == [ClaudeProvider.usageURL],
+            "one request total — the mirror's; the condemned row token sent nothing"
+        )
+        #expect(setup.credentials.resolvedLocators == [setup.locator, mirrorRead])
+    }
+
+    @Test("a stale row token without a seeded mirror keeps its root-scoped sign-in instruction")
+    func staleRowTokenWithoutMirrorKeeps401() async throws {
+        let http = InMemoryHTTPTransport()
+        http.stub(ClaudeProvider.usageURL, with: HTTPResponse(status: 401))
+        let root = try SealedProfileRoots.root(
+            ClaudeProvider.id, label: "Claude DDB", at: ProviderFixtures.claudeRoot
+        )
+        let source = try ProviderFixtures.data("Claude", "claude-credential-happy")
+        let setup = try mirrorSetup(
+            root: root,
+            primarySecret: Self.accessToken,
+            primaryDocument: source,
+            locatorNeedsApproval: false,
+            http: http
+        )
+        let context = try setup.makeContext(InMemoryManagedCredentialStore())
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(using: context).first
+        )
+
+        do {
+            _ = try await ClaudeProvider().fetchUsage(for: account, using: context)
+            Issue.record("expected the 401 to stand")
+        } catch let error as UsageError {
+            #expect(error.category == .authenticationExpired)
+            #expect(error.reauthentication?.command == "claude")
+        }
+    }
+
+    @Test("a transient exchange failure keeps the mirror and spends no doomed request")
+    func transientExchangeFailureKeepsMirror() async throws {
+        let http = InMemoryHTTPTransport()
+        http.stub(ClaudeTokenRefresh.endpoint, with: HTTPResponse(status: 503))
+        let root = try SealedProfileRoots.root(
+            ClaudeProvider.id, label: "Claude", at: ProviderFixtures.claudeRoot
+        )
+        let setup = try mirrorSetup(root: root, http: http)
+        let expired = try expiredMirrorPayload()
+        let storage = ClaudeCredentialMirror.storageLocator(for: root.id)
+        let mirror = InMemoryManagedCredentialStore(payloads: [storage: expired])
+        let context = try setup.makeContext(mirror)
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(using: context).first
+        )
+
+        await #expect(throws: UsageError.interactionForbidden()) {
+            _ = try await ClaudeProvider().fetchUsage(for: account, using: context)
+        }
+        #expect(
+            mirror.containsCredential(at: storage),
+            "a token-endpoint blip must not destroy the refresh token"
+        )
+        #expect(
+            http.recordedRequests.map(\.url) == [ClaudeTokenRefresh.endpoint],
+            "the condemned stored token sent no usage request"
+        )
+    }
+
+    @Test("a terminally rejected refresh token deletes the mirror and surfaces the approval")
+    func invalidGrantSurfacesApproval() async throws {
+        let http = InMemoryHTTPTransport()
+        http.stub(
+            ClaudeTokenRefresh.endpoint,
+            with: HTTPResponse(status: 400, body: Data(#"{"error":"invalid_grant"}"#.utf8))
+        )
+        let root = try SealedProfileRoots.root(
+            ClaudeProvider.id, label: "Claude", at: ProviderFixtures.claudeRoot
+        )
+        let setup = try mirrorSetup(root: root, http: http)
+        let expired = try expiredMirrorPayload()
+        let storage = ClaudeCredentialMirror.storageLocator(for: root.id)
+        let mirror = InMemoryManagedCredentialStore(payloads: [storage: expired])
+        let context = try setup.makeContext(mirror)
+        let account = try #require(
+            try await ClaudeProvider().discoverAccounts(using: context).first
+        )
+
+        await #expect(throws: UsageError.interactionForbidden()) {
+            _ = try await ClaudeProvider().fetchUsage(for: account, using: context)
+        }
+        #expect(!mirror.containsCredential(at: storage))
+        #expect(
+            http.recordedRequests.map(\.url) == [ClaudeTokenRefresh.endpoint],
+            "a dead grant chain never spends a usage request"
         )
     }
 

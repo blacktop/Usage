@@ -103,18 +103,27 @@ public struct AppKeychainCredentialStore: CredentialSource, ManagedCredentialSto
     }
 
     public func containsCredential(at locator: CredentialLocator) -> Bool {
-        guard let address = Self.address(locator) else { return false }
+        guard let address = Self.storageAddress(locator) else { return false }
         let (status, _) = copyMatchingNoUI(
             Self.attributesQuery(service: address.service, account: address.account)
         )
         return status == errSecSuccess
     }
 
+    public func readCredential(at locator: CredentialLocator) -> String? {
+        guard let address = Self.storageAddress(locator) else { return nil }
+        let (status, result) = copyMatchingNoUI(
+            Self.payloadQuery(service: address.service, account: address.account)
+        )
+        guard status == errSecSuccess, let payload = result as? Data else { return nil }
+        return String(data: payload, encoding: .utf8)
+    }
+
     public func storeCredential(
         _ secret: String,
         at locator: CredentialLocator
     ) throws(ManagedCredentialStoreError) {
-        guard let address = Self.address(locator),
+        guard let address = Self.storageAddress(locator),
             let normalized = Self.credential(secret),
             let payload = normalized.data(using: .utf8)
         else {
@@ -144,7 +153,7 @@ public struct AppKeychainCredentialStore: CredentialSource, ManagedCredentialSto
     public func removeCredential(
         at locator: CredentialLocator
     ) throws(ManagedCredentialStoreError) {
-        guard let address = Self.address(locator) else { throw .invalidCredential }
+        guard let address = Self.storageAddress(locator) else { throw .invalidCredential }
         let status = runSecItem {
             SecItemDelete(
                 Self.itemQuery(service: address.service, account: address.account) as CFDictionary
@@ -211,6 +220,19 @@ public struct AppKeychainCredentialStore: CredentialSource, ManagedCredentialSto
         guard !allowsCredentialUI else { return operation() }
         guard suppressionAvailable else { return errSecInteractionNotAllowed }
         return KeychainUserInteraction.suppressed(operation)
+    }
+
+    /// The row a storage locator names. Writes, removals, and presence checks address whole rows
+    /// only: a document-path locator (more than one component) reads *inside* a row, and passing
+    /// one here is a caller error that must fail loudly rather than silently act on the row its
+    /// first component happens to name.
+    private static func storageAddress(
+        _ locator: CredentialLocator
+    ) -> (
+        service: String, account: String
+    )? {
+        guard locator.path.count == 1 else { return nil }
+        return address(locator)
     }
 
     /// The Keychain row a locator names: its service, and its account from the path's first

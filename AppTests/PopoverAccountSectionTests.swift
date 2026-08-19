@@ -232,6 +232,56 @@ struct PopoverAccountSectionTests {
         #expect(presentation.reapprovableAccounts.first?.account.label == "Claude DDB")
     }
 
+    @Test("Two windows sharing one label are told apart by their reported durations")
+    func collidingWindowLabelsGainPeriods() throws {
+        // The exact shape Codex reports for its Spark feature: two `.named` windows — kinds that
+        // say nothing about the period — whose durations are five hours and one week.
+        let sessionID = WindowID(
+            scope: .additional(feature: "codex-spark"),
+            slot: .primary,
+            period: .session
+        )
+        let weeklyID = WindowID(
+            scope: .additional(feature: "codex-spark"),
+            slot: .secondary,
+            period: .weekly
+        )
+        let planID = WindowID(scope: .plan, slot: .primary, period: .weekly)
+        let state = try reportedState(
+            label: "Codex",
+            canonicalID: "personal",
+            windows: [
+                window(id: planID, label: "Weekly", usedFraction: 0.1),
+                window(
+                    id: sessionID, label: "GPT-5.3-Codex-Spark", usedFraction: 0.2,
+                    kind: .named("GPT-5.3-Codex-Spark"), duration: .seconds(18_000)
+                ),
+                window(
+                    id: weeklyID, label: "GPT-5.3-Codex-Spark", usedFraction: 0.3,
+                    kind: .named("GPT-5.3-Codex-Spark"), duration: .seconds(604_800)
+                ),
+            ]
+        )
+
+        let presentation = ProviderUsagePresentation(
+            section: PopoverAccountSection(
+                id: CodexProvider.id,
+                displayName: "Codex",
+                accounts: [state],
+                unrepresentedProfiles: []
+            )
+        )
+
+        #expect(
+            presentation.windowGroups.map(\.label) == [
+                "Weekly",
+                "GPT-5.3-Codex-Spark · 5h",
+                "GPT-5.3-Codex-Spark · Weekly",
+            ],
+            "only the colliding label is qualified; the unique one is untouched"
+        )
+    }
+
     @Test("A partial cached report keeps its warning when a later refresh fails")
     func partialReportWarningSurvivesRefreshFailure() throws {
         let weeklyID = WindowID(scope: .plan, slot: .primary, period: .weekly)
@@ -317,14 +367,17 @@ struct PopoverAccountSectionTests {
         id: WindowID,
         label: String,
         usedFraction: Double,
-        resetsAt: Date? = nil
+        resetsAt: Date? = nil,
+        kind: UsageWindow.Kind = .weekly,
+        duration: Duration? = nil
     ) throws -> UsageWindow {
         try UsageWindow(
             id: id,
-            kind: .weekly,
+            kind: kind,
             label: label,
             usedFraction: usedFraction,
-            resetsAt: resetsAt
+            resetsAt: resetsAt,
+            duration: duration
         )
     }
 }

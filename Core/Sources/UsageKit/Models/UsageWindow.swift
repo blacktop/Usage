@@ -71,3 +71,19 @@ public struct UsageWindow: Sendable, Hashable, Codable, Identifiable {
         )
     }
 }
+
+extension UsageWindow {
+    /// The window's period in the provider's own terms — "5h", "2d", "Weekly" — or `nil` when
+    /// the reported duration states nothing usable.
+    ///
+    /// Derived from the duration rather than the kind, because feature windows are `.named` and
+    /// their kind says nothing about the period. The weekly band is tolerant: providers report
+    /// "weekly" windows anywhere near seven days, never reliably at exactly 604 800 seconds.
+    public var periodName: String? {
+        guard let seconds = duration?.components.seconds, seconds > 0 else { return nil }
+        if seconds >= 6 * 86_400, seconds <= 8 * 86_400 { return "Weekly" }
+        if seconds.isMultiple(of: 86_400) { return "\(seconds / 86_400)d" }
+        if seconds.isMultiple(of: 3_600) { return "\(seconds / 3_600)h" }
+        return nil
+    }
+}

@@ -105,6 +105,7 @@ public struct UsageError: Error, Sendable, Hashable, Codable, CustomStringConver
         case decodingFailure(field: FieldName)
         case invalidValue(field: FieldName, rule: ValidationRule)
         case credentialUnavailable(kind: CredentialLocator.Kind)
+        case credentialExpired
         case interactionForbidden
         case cancelled
         case providerUnavailable
@@ -141,6 +142,8 @@ public struct UsageError: Error, Sendable, Hashable, Codable, CustomStringConver
             "The provider reported an unusable value: \(field) \(rule.explanation)."
         case .credentialUnavailable(let kind):
             "No usable credential was found in the \(kind.noun)."
+        case .credentialExpired:
+            "The stored credential has expired."
         case .interactionForbidden:
             "This credential needs your approval in Settings before it can be read."
         case .cancelled:
@@ -197,6 +200,13 @@ extension UsageError {
 
     public static func credentialUnavailable(kind: CredentialLocator.Kind) -> UsageError {
         UsageError(category: .credentialUnavailable, reason: .credentialUnavailable(kind: kind))
+    }
+
+    /// A credential judged expired from its own stored expiry, before any request was spent.
+    /// When and why a provider raises it instead of letting the endpoint answer is the
+    /// provider's policy, documented at its call site.
+    public static func credentialExpired() -> UsageError {
+        UsageError(category: .authenticationExpired, reason: .credentialExpired)
     }
 
     public static func interactionForbidden() -> UsageError {

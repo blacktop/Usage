@@ -7,6 +7,8 @@ import Foundation
 struct ClaudeCredentialMetadata: Sendable, Hashable {
     let subscriptionType: String?
     let rateLimitTier: String?
+    /// The document's own expiry claim, milliseconds since the epoch. A timestamp, not a secret.
+    let expiresAtMilliseconds: Int?
 
     var planLabel: String? {
         ClaudePlanLabel.make(subscriptionType: subscriptionType, rateLimitTier: rateLimitTier)
@@ -36,27 +38,57 @@ enum ClaudeCredentialFile {
     ) throws(UsageError)
         -> ClaudeCredentialMetadata
     {
-        guard let document = try? JSONDecoder().decode(Document.self, from: data) else {
+        guard let fields = oauthFields(from: data) else {
             throw UsageError.decodingFailure(field: "credentials.json")
         }
-        guard document.hasAccessToken else {
+        guard fields.accessToken != nil else {
             throw UsageError.credentialUnavailable(kind: kind)
         }
         return ClaudeCredentialMetadata(
-            subscriptionType: document.subscriptionType,
-            rateLimitTier: document.rateLimitTier
+            subscriptionType: fields.subscriptionType,
+            rateLimitTier: fields.rateLimitTier,
+            expiresAtMilliseconds: fields.expiresAtMilliseconds
         )
     }
 
-    private struct Document: Decodable {
-        let hasAccessToken: Bool
+    /// The one decoder for the document's OAuth fields, shared with the mirror and its refresher.
+    ///
+    /// The tokens travel only inside the returned value: `parse` checks the access token for
+    /// presence and drops it, `ClaudeCredentialMirror` copies both tokens straight into a
+    /// Usage-owned row, and `ClaudeTokenRefresh` exchanges the refresh token without returning it.
+    static func oauthFields(from data: Data) -> OAuthFields? {
+        try? JSONDecoder().decode(OAuthFields.self, from: data)
+    }
+
+    struct OAuthFields: Decodable {
+        let accessToken: String?
+        let refreshToken: String?
+        /// Claude Code stores expiry as milliseconds since the epoch; kept raw so the mirror
+        /// round-trips the exact representation.
+        let expiresAtMilliseconds: Int?
         let subscriptionType: String?
         let rateLimitTier: String?
+
+        init(
+            accessToken: String?,
+            refreshToken: String?,
+            expiresAtMilliseconds: Int?,
+            subscriptionType: String?,
+            rateLimitTier: String?
+        ) {
+            self.accessToken = accessToken
+            self.refreshToken = refreshToken
+            self.expiresAtMilliseconds = expiresAtMilliseconds
+            self.subscriptionType = subscriptionType
+            self.rateLimitTier = rateLimitTier
+        }
 
         init(from decoder: any Decoder) throws {
             let root = try decoder.container(keyedBy: AnyCodingKey.self)
             let oauth = root.nested("claudeAiOauth")
-            hasAccessToken = oauth?.trimmedString("accessToken") != nil
+            accessToken = oauth?.trimmedString("accessToken")
+            refreshToken = oauth?.trimmedString("refreshToken")
+            expiresAtMilliseconds = oauth?.lenientInt("expiresAt")
             subscriptionType = oauth?.trimmedString("subscriptionType")
             rateLimitTier = oauth?.trimmedString("rateLimitTier")
         }

@@ -19,6 +19,22 @@ enum ProviderFixtures {
     static let codexRoot = root(".codex")
     static let copilotRoot = root(".copilot")
 
+    /// The access token a stubbed Claude token exchange mints — one spelling for every suite.
+    static let mintedClaudeAccessToken = "sk-ant-oat01-FAKE-MINTED-TOKEN-DO-NOT-USE-00000000000"
+
+    /// One successful Claude token-exchange response, shared by the refresher and provider
+    /// suites so the grant body has one construction rather than three.
+    static func claudeGrantResponse(rotatedRefreshToken: String? = nil) -> HTTPResponse {
+        let rotated = rotatedRefreshToken.map { #","refresh_token":"\#($0)""# } ?? ""
+        return HTTPResponse(
+            status: 200,
+            body: Data(
+                #"{"access_token":"\#(mintedClaudeAccessToken)","expires_in":28800\#(rotated)}"#
+                    .utf8
+            )
+        )
+    }
+
     static func data(_ provider: String, _ name: String) throws -> Data {
         let url = try #require(
             Bundle.module.url(

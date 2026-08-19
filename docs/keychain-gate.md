@@ -271,6 +271,33 @@ required, and an unavailable suppression lever fails background reads closed rat
 unsuppressed. Re-run both gates after any signing-identity change, appending new rows rather than
 editing these.
 
+## 2026-08-19: Claude Code resets its item's ACL on every write; the mirror self-refreshes
+
+Root cause of the recurring re-approvals, extracted from the Claude Code CLI binary itself
+(`strings` on `@anthropic-ai/claude-code/bin/claude.exe`, v2.1.235):
+
+```
+add-generic-password -U -a "${account}" -s "${service}" -X "${hexPayload}"
+```
+
+Claude Code writes its credential through the `security` command-line tool on **every token
+write**. `-U` updates the row in place — `cdat` is preserved, which is why the recreation checks
+above kept answering "unchanged" — but the write resets the item's access control, revoking any
+Always-Allow grant Usage held. A durable grant on Claude Code's item is therefore impossible by
+construction; the observed grant lifetimes match the item's `mdat` history exactly (a grant on the
+DDB item survived precisely the two-day window in which that root ran no `claude` session).
+
+Decision: the mirror now stores the **refresh token and expiry** alongside the access token, and
+`ClaudeTokenRefresh` exchanges it directly against `https://platform.claude.com/v1/oauth/token`
+with Claude Code's public client identifier — the same mechanism CodexBar ships
+(`ClaudeOAuthCredentials.refreshAccessTokenCore`), which is the actual reason CodexBar does not
+re-prompt. One approval captures the credential; Usage then mints its own access tokens until the
+provider answers `invalid_grant`, which deletes the row and surfaces one fresh approval. This
+supersedes the 2026-08-16 access-token-only redaction and, deliberately, the "Usage never
+refreshes the OAuth token" posture: the exchange is confined to `ClaudeTokenRefresh`, the tokens
+never leave the Usage-owned row's flow, and CodexBar's fleet demonstrates that Anthropic's
+refresh grants tolerate a second client without invalidating Claude Code's own session.
+
 ## 2026-08-16: ACL preflight, fetch-time re-addressing, and the redacted mirror
 
 Claude Code recreated its plain `Claude Code-credentials` item on 2026-08-15 (observed via `cdat`),
